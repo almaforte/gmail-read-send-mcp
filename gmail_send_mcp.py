@@ -279,7 +279,12 @@ def connect(_: None = Depends(_check_admin)):
 
 @app.get("/oauth/callback")
 def oauth_callback(request: Request):
-    flow = Flow.from_client_config(CLIENT_CONFIG, scopes=SCOPES, redirect_uri=REDIRECT_URI)
+    flow = Flow.from_client_config(
+        CLIENT_CONFIG,
+        scopes=SCOPES,
+        redirect_uri=REDIRECT_URI,
+        state=request.query_params.get("state"),
+    )
     # Railway (come la maggior parte dei PaaS) termina https sul proprio proxy e inoltra
     # al servizio in http semplice. Senza questa correzione, request.url risulta in http://
     # e la libreria Google rifiuta di completare lo scambio del codice di autorizzazione.
