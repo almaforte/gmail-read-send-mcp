@@ -9,6 +9,12 @@ Ogni casella viene identificata dal proprio indirizzo email, la stessa
 convenzione usata da navbuildz/gmail-mcp-server, cosi' Claude puo' riferirsi
 alle caselle allo stesso modo con entrambi i connettori.
 
+Le email vengono inviate in HTML e includono automaticamente la firma
+ufficiale della casella mittente, se configurata in SIGNATURES. La casella
+endolift@corsalis.ch ha tre varianti di firma selezionabili con il
+parametro signature_variant ("logistics", "accounting", "medical", che e'
+il valore predefinito).
+
 Pagina di gestione account su /setup, protetta da ADMIN_PASSWORD via HTTP
 Basic Auth. Endpoint MCP su /mcp, da collegare a Claude come SECONDO
 connettore personalizzato (oltre a quello di navbuildz).
@@ -21,8 +27,10 @@ Variabili d'ambiente richieste:
     FERNET_KEY             Chiave di cifratura per i token, generata con:
                             python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
     PORT                   Porta di ascolto (default 3001)
-    TOKENS_DATA            Opzionale: contenuto JSON dei token, per persistere
-                            le connessioni tra un redeploy e l'altro su Railway
+    TOKENS_FILE            Percorso del file token su un volume persistente,
+                            es. /data/tokens.json
+    TOKENS_DATA            Opzionale: contenuto JSON dei token, usato solo
+                            come innesco iniziale se TOKENS_FILE e' vuoto
 """
 
 import base64
@@ -122,6 +130,84 @@ def _gmail_service(email: str):
 
 
 # ---------------------------------------------------------------------------
+# Firme ufficiali per casella. Solo testo, link e colore d'accento: le foto,
+# i loghi e le icone social non sono inclusi perche' non e' disponibile il
+# file immagine, solo lo screenshot della firma gia' composta.
+# ---------------------------------------------------------------------------
+
+_CORSALIS_DISCLAIMER = (
+    "The content of this email is confidential and intended for the recipient "
+    "specified in message only. It is strictly forbidden to share any part of "
+    "this message with any third party, without a written consent of the "
+    "sender. If you received this message by mistake, please reply to this "
+    "message and follow with its deletion, so that we can ensure such a "
+    "mistake does not occur in the future."
+)
+
+SIGNATURES = {
+    "am.forte@almaval.ch": (
+        "Cordialement,\n\n"
+        "Dr Alberto M. Forte\n"
+        "Directeur médical\n"
+        "Psychiatre & psychothérapeute\n\n"
+        "am.forte@almaval.ch - am.forte@hin.ch\n"
+        "Secrétariat : +41 21 525 35 14\n"
+        "Secrétariat (mobile, aussi WhatsApp) : +41 76 702 78 69\n"
+        "Ligne directe (aussi WhatsApp) : +41 76 457 72 75\n"
+        "Castel de Bois Genoud, 1023 Crissier\n"
+        "almaval.ch"
+    ),
+    "forte.albertomaria@gmail.com": (
+        "Cordialement,\n\n"
+        "Dr Alberto M. Forte\n"
+        "+41 76 615 03 88\n"
+        "Ch. du miroir 32, CH-1090 La Croix sur Lutry"
+    ),
+    "info@corsalis.ch": (
+        "Bests,\n\n"
+        "Dr Alberto M. Forte\n"
+        "CEO\n"
+        "Medical director\n"
+        "Corsalis\n\n"
+        "info@corsalis.ch\n"
+        "+41 76 469 1986 (only WhatsApp)\n"
+        "Ch. du miroir 32, CH-1090 La Croix\n"
+        "corsalis.ch\n\n"
+        + _CORSALIS_DISCLAIMER
+    ),
+}
+
+_ENDOLIFT_ROLE_LINES = {
+    "logistics": "Logistics Department",
+    "accounting": "Accounting Department",
+    "medical": "Dr Alberto M. Forte\nMedical director",
+}
+
+
+def _endolift_signature(variant: str) -> str:
+    role = _ENDOLIFT_ROLE_LINES.get(variant, _ENDOLIFT_ROLE_LINES["medical"])
+    return (
+        "Bests,\n\n"
+        f"{role}\n"
+        "Official Eufoton Distributor in Switzerland\n"
+        "Granted by Corsalis\n\n"
+        "endolift@corsalis.ch\n"
+        "+41 76 469 1986 (only WhatsApp)\n"
+        "Scientific committee: +41 79 108 01 24\n"
+        "Legal counsel Italy & Switzerland: +39 348 491 2171\n"
+        "Ch. du miroir 32, CH-1090 La Croix\n"
+        "corsalis.ch\n\n"
+        + _CORSALIS_DISCLAIMER
+    )
+
+
+def _get_signature(account: str, signature_variant: str = None) -> str:
+    if account == "endolift@corsalis.ch":
+        return _endolift_signature(signature_variant or "medical")
+    return SIGNATURES.get(account, "")
+
+
+# ---------------------------------------------------------------------------
 # Strumenti MCP
 # ---------------------------------------------------------------------------
 
@@ -142,12 +228,20 @@ def _build_mime(
     to: str,
     subject: str,
     body: str,
+    account: str,
     cc: Optional[str] = None,
     bcc: Optional[str] = None,
     in_reply_to: Optional[str] = None,
     references: Optional[str] = None,
+    signature_variant: Optional[str] = None,
+    include_signature: bool = True,
 ) -> str:
-    message = MIMEText(body)
+    full_body = body
+    signature = _get_signature(account, signature_variant) if include_signature else ""
+    if signature:
+        full_body = f"{body}\n\n{signature}"
+
+    message = MIMEText(full_body)
     message["to"] = to
     message["subject"] = subject
     if cc:
@@ -174,15 +268,19 @@ def send_email(
     body: str,
     cc: Optional[str] = None,
     bcc: Optional[str] = None,
+    signature_variant: Optional[str] = None,
 ) -> dict:
     """
-    Invia una nuova email da una delle caselle collegate.
+    Invia una nuova email da una delle caselle collegate. La firma ufficiale
+    della casella viene aggiunta automaticamente, se configurata.
 
     account: indirizzo della casella mittente (vedi list_accounts)
     to, cc, bcc: indirizzi destinatari, separati da virgola se piu' di uno
+    signature_variant: solo per endolift@corsalis.ch, una tra
+        "logistics", "accounting", "medical" (default "medical")
     """
     service = _gmail_service(account)
-    raw = _build_mime(to, subject, body, cc, bcc)
+    raw = _build_mime(to, subject, body, account, cc, bcc, signature_variant=signature_variant)
     sent = service.users().messages().send(userId="me", body={"raw": raw}).execute()
     return {"id": sent["id"], "threadId": sent["threadId"], "stato": "inviata"}
 
@@ -194,18 +292,32 @@ def create_draft(
     subject: str,
     body: str,
     cc: Optional[str] = None,
+    signature_variant: Optional[str] = None,
 ) -> dict:
-    """Crea una bozza in una delle caselle collegate, senza inviarla."""
+    """
+    Crea una bozza in una delle caselle collegate, senza inviarla. La firma
+    ufficiale della casella viene aggiunta automaticamente, se configurata.
+
+    signature_variant: solo per endolift@corsalis.ch, una tra
+        "logistics", "accounting", "medical" (default "medical")
+    """
     service = _gmail_service(account)
-    raw = _build_mime(to, subject, body, cc)
+    raw = _build_mime(to, subject, body, account, cc, signature_variant=signature_variant)
     draft = service.users().drafts().create(userId="me", body={"message": {"raw": raw}}).execute()
     return {"id": draft["id"], "stato": "bozza creata"}
 
 
 @mcp.tool()
-def reply_email(account: str, message_id: str, body: str, reply_all: bool = False) -> dict:
+def reply_email(
+    account: str,
+    message_id: str,
+    body: str,
+    reply_all: bool = False,
+    signature_variant: Optional[str] = None,
+) -> dict:
     """
-    Risponde a un'email esistente restando nello stesso thread.
+    Risponde a un'email esistente restando nello stesso thread. La firma
+    ufficiale della casella viene aggiunta automaticamente, se configurata.
 
     account: la casella da cui rispondere
     message_id: l'id del messaggio Gmail a cui rispondere, lo stesso restituito
@@ -213,6 +325,8 @@ def reply_email(account: str, message_id: str, body: str, reply_all: bool = Fals
     body: testo della risposta
     reply_all: se True risponde anche a tutti i destinatari originali,
         non solo al mittente
+    signature_variant: solo per endolift@corsalis.ch, una tra
+        "logistics", "accounting", "medical" (default "medical")
     """
     service = _gmail_service(account)
     original = service.users().messages().get(
@@ -239,9 +353,11 @@ def reply_email(account: str, message_id: str, body: str, reply_all: bool = Fals
         to=to,
         subject=subject,
         body=body,
+        account=account,
         cc=cc,
         in_reply_to=headers.get("Message-ID"),
         references=references,
+        signature_variant=signature_variant,
     )
     sent = service.users().messages().send(
         userId="me", body={"raw": raw, "threadId": original["threadId"]}
