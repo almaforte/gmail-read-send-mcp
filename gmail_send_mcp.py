@@ -280,7 +280,11 @@ def connect(_: None = Depends(_check_admin)):
 @app.get("/oauth/callback")
 def oauth_callback(request: Request):
     flow = Flow.from_client_config(CLIENT_CONFIG, scopes=SCOPES, redirect_uri=REDIRECT_URI)
-    flow.fetch_token(authorization_response=str(request.url))
+    # Railway (come la maggior parte dei PaaS) termina https sul proprio proxy e inoltra
+    # al servizio in http semplice. Senza questa correzione, request.url risulta in http://
+    # e la libreria Google rifiuta di completare lo scambio del codice di autorizzazione.
+    authorization_response = str(request.url).replace("http://", "https://", 1)
+    flow.fetch_token(authorization_response=authorization_response)
     creds = flow.credentials
 
     oauth2 = build("oauth2", "v2", credentials=creds)
@@ -296,4 +300,10 @@ app.mount("/mcp", mcp.streamable_http_app())
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 3001)))
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 3001)),
+        proxy_headers=True,
+        forwarded_allow_ips="*",
+    )
