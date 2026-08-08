@@ -304,7 +304,7 @@ def oauth_callback(request: Request):
     return RedirectResponse("/setup")
 
 
-app.mount("/mcp", mcp.streamable_http_app())
+app.mount("/", mcp.streamable_http_app())
 
 
 if __name__ == "__main__":
