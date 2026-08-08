@@ -80,11 +80,15 @@ fernet = Fernet(FERNET_KEY.encode())
 
 
 def _load_tokens() -> dict:
+    if TOKENS_FILE.exists():
+        content = TOKENS_FILE.read_text().strip()
+        if content:
+            return json.loads(content)
     raw = os.environ.get("TOKENS_DATA")
     if raw:
-        return json.loads(raw)
-    if TOKENS_FILE.exists():
-        return json.loads(TOKENS_FILE.read_text())
+        tokens = json.loads(raw)
+        _save_tokens(tokens)  # migra subito il contenuto sul volume persistente
+        return tokens
     return {}
 
 
