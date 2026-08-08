@@ -92,6 +92,7 @@ def _save_tokens(tokens: dict) -> None:
 
 
 _tokens: dict = _load_tokens()  # indirizzo email -> credenziali cifrate (Fernet)
+_pending_pkce: dict = {}  # state OAuth -> code_verifier, tra /connect e /oauth/callback
 
 
 def _store_credentials(email: str, creds: Credentials) -> None:
@@ -273,17 +274,21 @@ def setup_page(_: None = Depends(_check_admin)):
 @app.get("/connect")
 def connect(_: None = Depends(_check_admin)):
     flow = Flow.from_client_config(CLIENT_CONFIG, scopes=SCOPES, redirect_uri=REDIRECT_URI)
-    auth_url, _state = flow.authorization_url(access_type="offline", prompt="consent")
+    auth_url, state = flow.authorization_url(access_type="offline", prompt="consent")
+    if flow.code_verifier:
+        _pending_pkce[state] = flow.code_verifier
     return RedirectResponse(auth_url)
 
 
 @app.get("/oauth/callback")
 def oauth_callback(request: Request):
+    state = request.query_params.get("state")
     flow = Flow.from_client_config(
         CLIENT_CONFIG,
         scopes=SCOPES,
         redirect_uri=REDIRECT_URI,
-        state=request.query_params.get("state"),
+        state=state,
+        code_verifier=_pending_pkce.pop(state, None),
     )
     # Railway (come la maggior parte dei PaaS) termina https sul proprio proxy e inoltra
     # al servizio in http semplice. Senza questa correzione, request.url risulta in http://
