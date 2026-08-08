@@ -1,0 +1,7 @@
+fastapi==0.115.*
+uvicorn[standard]==0.32.*
+mcp==1.*
+google-auth==2.*
+google-auth-oauthlib==1.*
+google-api-python-client==2.*
+cryptography==43.*
