@@ -43,6 +43,7 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 # ---------------------------------------------------------------------------
 # Configurazione
@@ -120,7 +121,17 @@ def _gmail_service(email: str):
 # Strumenti MCP
 # ---------------------------------------------------------------------------
 
-mcp = FastMCP("Gmail Send", stateless_http=True)
+_server_host = SERVER_URL.split("://", 1)[-1]
+
+mcp = FastMCP(
+    "Gmail Send",
+    stateless_http=True,
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=["127.0.0.1:*", "localhost:*", _server_host],
+        allowed_origins=[SERVER_URL],
+    ),
+)
 
 
 def _build_mime(
