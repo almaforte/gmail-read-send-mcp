@@ -194,8 +194,12 @@ SIGNATURES_TEXT = {
     ),
 }
 
+_ALMAVAL_LOGO_URL = "https://almaval.ch/wp-content/uploads/2023/10/cropped-AVL_Logo11.png"
+
 SIGNATURES_HTML = {
     "am.forte@almaval.ch": (
+        f'<img src="{_ALMAVAL_LOGO_URL}" alt="Almaval" width="140" '
+        'style="display:block;margin-bottom:12px;border:0;"><br>'
         "Cordialement,<br><br>"
         "Dr Alberto M. Forte<br>"
         "Directeur médical<br>"
@@ -295,7 +299,7 @@ def _get_signature_html(account: str, signature_variant: str = None) -> str:
 
 STYLE_DEFAULT: dict = {
     "font_family": "Verdana, Geneva, sans-serif",
-    "font_size": "small",
+    "font_size": "10px",
     "color": "#666666",
     "background_color": "#ffffff",
 }
