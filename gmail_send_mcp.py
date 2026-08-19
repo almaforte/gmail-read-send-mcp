@@ -465,6 +465,71 @@ def list_emails(account: str, query: str = "", max_results: int = 20) -> list[di
     return results
 
 
+def _extract_body_and_attachments(payload: dict) -> tuple[str, str, list[str]]:
+    """
+    Percorre la struttura MIME di un messaggio (che puo' essere semplice,
+    multipart, con allegati annidati) e restituisce (testo_semplice,
+    testo_html, nomi_allegati). Se manca il testo semplice ma c'e' l'HTML,
+    il chiamante decide se e come ripiegare su quello.
+    """
+    plain_text = ""
+    html_text = ""
+    attachments: list[str] = []
+
+    def _decode(data: str) -> str:
+        return base64.urlsafe_b64decode(data + "=" * (-len(data) % 4)).decode("utf-8", errors="replace")
+
+    def _walk(part: dict) -> None:
+        nonlocal plain_text, html_text
+        mime_type = part.get("mimeType", "")
+        filename = part.get("filename") or ""
+        body = part.get("body", {})
+
+        if filename:
+            attachments.append(filename)
+            return  # gli allegati non vanno letti come testo
+
+        if mime_type == "text/plain" and body.get("data"):
+            plain_text += _decode(body["data"])
+        elif mime_type == "text/html" and body.get("data"):
+            html_text += _decode(body["data"])
+
+        for sub_part in part.get("parts", []):
+            _walk(sub_part)
+
+    _walk(payload)
+    return plain_text, html_text, attachments
+
+
+@mcp.tool()
+def get_email(account: str, message_id: str) -> dict:
+    """
+    Recupera il contenuto completo di una email, corpo del testo incluso.
+
+    account: la casella da cui leggere
+    message_id: l'id del messaggio, ottenuto da list_emails
+    """
+    service = _gmail_service(account)
+    msg = service.users().messages().get(userId="me", id=message_id, format="full").execute()
+    headers = {h["name"]: h["value"] for h in msg["payload"]["headers"]}
+
+    plain_text, html_text, attachments = _extract_body_and_attachments(msg["payload"])
+    body = plain_text.strip() or html_text.strip() or msg.get("snippet", "")
+
+    return {
+        "id": msg["id"],
+        "threadId": msg["threadId"],
+        "from": headers.get("From", ""),
+        "to": headers.get("To", ""),
+        "cc": headers.get("Cc", ""),
+        "subject": headers.get("Subject", ""),
+        "date": headers.get("Date", ""),
+        "body": body,
+        "labelIds": msg.get("labelIds", []),
+        "attachments": attachments,
+    }
+
+
 @mcp.tool()
 def send_email(
     account: str,
