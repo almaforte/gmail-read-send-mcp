@@ -198,12 +198,12 @@ _ALMAVAL_LOGO_URL = "https://almaval.ch/wp-content/uploads/2023/10/cropped-AVL_L
 
 SIGNATURES_HTML = {
     "am.forte@almaval.ch": (
-        f'<img src="{_ALMAVAL_LOGO_URL}" alt="Almaval" width="140" '
-        'style="display:block;margin-bottom:12px;border:0;"><br>'
         "Cordialement,<br><br>"
         "Dr Alberto M. Forte<br>"
         "Directeur médical<br>"
         "Psychiatre &amp; psychothérapeute<br><br>"
+        f'<img src="{_ALMAVAL_LOGO_URL}" alt="Almaval" width="140" '
+        'style="display:block;margin-bottom:12px;border:0;"><br>'
         "am.forte@almaval.ch - am.forte@hin.ch<br>"
         "Secrétariat : +41 21 525 35 14<br>"
         "Secrétariat (mobile, aussi WhatsApp) : +41 76 702 78 69<br>"
