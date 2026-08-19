@@ -426,6 +426,46 @@ def list_accounts() -> list[str]:
 
 
 @mcp.tool()
+def list_emails(account: str, query: str = "", max_results: int = 20) -> list[dict]:
+    """
+    Elenca le email di una casella collegata, con gli stessi filtri di ricerca
+    di Gmail (es. "in:inbox", "is:unread", "from:...", "newer_than:7d").
+
+    account: indirizzo della casella da interrogare (vedi list_accounts)
+    query: filtro di ricerca Gmail, vuoto per le email piu' recenti senza filtro
+    max_results: numero massimo di email da restituire (limite 50)
+    """
+    service = _gmail_service(account)
+    max_results = max(1, min(max_results, 50))
+
+    resp = service.users().messages().list(
+        userId="me", q=query or None, maxResults=max_results
+    ).execute()
+    message_refs = resp.get("messages", [])
+
+    results = []
+    for ref in message_refs:
+        msg = service.users().messages().get(
+            userId="me",
+            id=ref["id"],
+            format="metadata",
+            metadataHeaders=["From", "To", "Subject", "Date"],
+        ).execute()
+        headers = {h["name"]: h["value"] for h in msg["payload"]["headers"]}
+        results.append({
+            "id": msg["id"],
+            "threadId": msg["threadId"],
+            "from": headers.get("From", ""),
+            "to": headers.get("To", ""),
+            "subject": headers.get("Subject", ""),
+            "date": headers.get("Date", ""),
+            "snippet": msg.get("snippet", ""),
+            "labelIds": msg.get("labelIds", []),
+        })
+    return results
+
+
+@mcp.tool()
 def send_email(
     account: str,
     to: str,
