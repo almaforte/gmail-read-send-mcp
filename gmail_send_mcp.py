@@ -530,6 +530,63 @@ def get_email(account: str, message_id: str) -> dict:
     }
 
 
+def _get_or_create_label(service, account: str, label_name: str) -> str:
+    """
+    Trova l'id di un'etichetta dal suo nome visibile (es. "Da trattare"), la
+    crea se non esiste ancora su quella casella. Il confronto e' esatto,
+    Gmail stesso considera i nomi delle etichette maiuscole/minuscole
+    significative.
+    """
+    resp = service.users().labels().list(userId="me").execute()
+    for label in resp.get("labels", []):
+        if label["name"] == label_name:
+            return label["id"]
+
+    created = service.users().labels().create(
+        userId="me",
+        body={
+            "name": label_name,
+            "labelListVisibility": "labelShow",
+            "messageListVisibility": "show",
+        },
+    ).execute()
+    return created["id"]
+
+
+@mcp.tool()
+def archive_email(account: str, message_id: str) -> dict:
+    """
+    Archivia un'email togliendola dalla posta in arrivo. Resta comunque
+    accessibile tramite ricerca o tramite l'etichetta "Tutti i messaggi".
+
+    account: la casella a cui appartiene l'email
+    message_id: l'id del messaggio, ottenuto da list_emails
+    """
+    service = _gmail_service(account)
+    service.users().messages().modify(
+        userId="me", id=message_id, body={"removeLabelIds": ["INBOX"]}
+    ).execute()
+    return {"id": message_id, "stato": "archiviata"}
+
+
+@mcp.tool()
+def label_email(account: str, message_id: str, label_name: str) -> dict:
+    """
+    Applica un'etichetta a un'email, creandola su quella casella se non
+    esiste ancora.
+
+    account: la casella a cui appartiene l'email
+    message_id: l'id del messaggio, ottenuto da list_emails
+    label_name: nome dell'etichetta da applicare, es. "Da trattare"
+    """
+    service = _gmail_service(account)
+    label_id = _get_or_create_label(service, account, label_name)
+    service.users().messages().modify(
+        userId="me", id=message_id, body={"addLabelIds": [label_id]}
+    ).execute()
+    return {"id": message_id, "etichetta": label_name, "stato": "applicata"}
+
+
 @mcp.tool()
 def send_email(
     account: str,
