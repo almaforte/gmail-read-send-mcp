@@ -9,11 +9,22 @@ Ogni casella viene identificata dal proprio indirizzo email, la stessa
 convenzione usata da navbuildz/gmail-mcp-server, cosi' Claude puo' riferirsi
 alle caselle allo stesso modo con entrambi i connettori.
 
-Le email vengono inviate in HTML e includono automaticamente la firma
-ufficiale della casella mittente, se configurata in SIGNATURES. La casella
-endolift@corsalis.ch ha tre varianti di firma selezionabili con il
-parametro signature_variant ("logistics", "accounting", "medical", che e'
-il valore predefinito).
+Le email includono automaticamente la firma ufficiale della casella
+mittente, se configurata. La casella endolift@corsalis.ch ha tre varianti
+di firma selezionabili con il parametro signature_variant ("logistics",
+"accounting", "medical", che e' il valore predefinito).
+
+Formattazione HTML: send_email, create_draft e reply_email accettano un
+parametro opzionale html_body. Quando e' presente, il messaggio viene
+costruito in multipart/alternative: la versione testuale (body + firma
+testuale) resta come fallback, la versione HTML (html_body + firma HTML)
+diventa la parte principale. La parte HTML viene sempre avvolta dal
+connettore in uno stile uniforme (famiglia di carattere, dimensione,
+colore, sfondo), definito in STYLE_DEFAULT/STYLE_OVERRIDES piu' sotto:
+chi scrive il messaggio non deve occuparsi dello stile, e una eventuale
+differenziazione per casella si aggiunge li', non nel corpo delle
+funzioni. Se html_body non viene fornito, il comportamento resta quello
+di sempre: solo testo semplice, con firma testuale appesa in fondo.
 
 Pagina di gestione account su /setup, protetta da ADMIN_PASSWORD via HTTP
 Basic Auth. Endpoint MCP su /mcp, da collegare a Claude come SECONDO
@@ -38,6 +49,7 @@ import contextlib
 import json
 import os
 import secrets
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Optional
@@ -130,12 +142,15 @@ def _gmail_service(email: str):
 
 
 # ---------------------------------------------------------------------------
-# Firme ufficiali per casella. Solo testo, link e colore d'accento: le foto,
-# i loghi e le icone social non sono inclusi perche' non e' disponibile il
-# file immagine, solo lo screenshot della firma gia' composta.
+# Firme ufficiali per casella, in due versioni parallele:
+#   SIGNATURES_TEXT  alimenta la parte testuale semplice / il fallback
+#   SIGNATURES_HTML  alimenta la parte HTML, appesa dopo html_body
+# Le due versioni vanno tenute sincronizzate a mano quando cambia una firma.
+# Foto, loghi e icone social non sono inclusi perche' non e' disponibile
+# il file immagine, solo lo screenshot della firma gia' composta.
 # ---------------------------------------------------------------------------
 
-_CORSALIS_DISCLAIMER = (
+_CORSALIS_DISCLAIMER_TEXT = (
     "The content of this email is confidential and intended for the recipient "
     "specified in message only. It is strictly forbidden to share any part of "
     "this message with any third party, without a written consent of the "
@@ -144,7 +159,9 @@ _CORSALIS_DISCLAIMER = (
     "mistake does not occur in the future."
 )
 
-SIGNATURES = {
+_CORSALIS_DISCLAIMER_HTML = _CORSALIS_DISCLAIMER_TEXT
+
+SIGNATURES_TEXT = {
     "am.forte@almaval.ch": (
         "Cordialement,\n\n"
         "Dr Alberto M. Forte\n"
@@ -173,19 +190,58 @@ SIGNATURES = {
         "+41 76 469 1986 (only WhatsApp)\n"
         "Ch. du miroir 32, CH-1090 La Croix\n"
         "corsalis.ch\n\n"
-        + _CORSALIS_DISCLAIMER
+        + _CORSALIS_DISCLAIMER_TEXT
     ),
 }
 
-_ENDOLIFT_ROLE_LINES = {
+SIGNATURES_HTML = {
+    "am.forte@almaval.ch": (
+        "Cordialement,<br><br>"
+        "Dr Alberto M. Forte<br>"
+        "Directeur médical<br>"
+        "Psychiatre &amp; psychothérapeute<br><br>"
+        "am.forte@almaval.ch - am.forte@hin.ch<br>"
+        "Secrétariat : +41 21 525 35 14<br>"
+        "Secrétariat (mobile, aussi WhatsApp) : +41 76 702 78 69<br>"
+        "Ligne directe (aussi WhatsApp) : +41 76 457 72 75<br>"
+        "Castel de Bois Genoud, 1023 Crissier<br>"
+        "almaval.ch"
+    ),
+    "forte.albertomaria@gmail.com": (
+        "Cordialement,<br><br>"
+        "Dr Alberto M. Forte<br>"
+        "+41 76 615 03 88<br>"
+        "Ch. du miroir 32, CH-1090 La Croix sur Lutry"
+    ),
+    "info@corsalis.ch": (
+        "Bests,<br><br>"
+        "Dr Alberto M. Forte<br>"
+        "CEO<br>"
+        "Medical director<br>"
+        "Corsalis<br><br>"
+        "info@corsalis.ch<br>"
+        "+41 76 469 1986 (only WhatsApp)<br>"
+        "Ch. du miroir 32, CH-1090 La Croix<br>"
+        "corsalis.ch<br><br>"
+        + _CORSALIS_DISCLAIMER_HTML
+    ),
+}
+
+_ENDOLIFT_ROLE_LINES_TEXT = {
     "logistics": "Logistics Department",
     "accounting": "Accounting Department",
     "medical": "Dr Alberto M. Forte\nMedical director",
 }
 
+_ENDOLIFT_ROLE_LINES_HTML = {
+    "logistics": "Logistics Department",
+    "accounting": "Accounting Department",
+    "medical": "Dr Alberto M. Forte<br>Medical director",
+}
 
-def _endolift_signature(variant: str) -> str:
-    role = _ENDOLIFT_ROLE_LINES.get(variant, _ENDOLIFT_ROLE_LINES["medical"])
+
+def _endolift_signature_text(variant: str) -> str:
+    role = _ENDOLIFT_ROLE_LINES_TEXT.get(variant, _ENDOLIFT_ROLE_LINES_TEXT["medical"])
     return (
         "Bests,\n\n"
         f"{role}\n"
@@ -197,14 +253,74 @@ def _endolift_signature(variant: str) -> str:
         "Legal counsel Italy & Switzerland: +39 348 491 2171\n"
         "Ch. du miroir 32, CH-1090 La Croix\n"
         "corsalis.ch\n\n"
-        + _CORSALIS_DISCLAIMER
+        + _CORSALIS_DISCLAIMER_TEXT
     )
 
 
-def _get_signature(account: str, signature_variant: str = None) -> str:
+def _endolift_signature_html(variant: str) -> str:
+    role = _ENDOLIFT_ROLE_LINES_HTML.get(variant, _ENDOLIFT_ROLE_LINES_HTML["medical"])
+    return (
+        "Bests,<br><br>"
+        f"{role}<br>"
+        "Official Eufoton Distributor in Switzerland<br>"
+        "Granted by Corsalis<br><br>"
+        "endolift@corsalis.ch<br>"
+        "+41 76 469 1986 (only WhatsApp)<br>"
+        "Scientific committee: +41 79 108 01 24<br>"
+        "Legal counsel Italy &amp; Switzerland: +39 348 491 2171<br>"
+        "Ch. du miroir 32, CH-1090 La Croix<br>"
+        "corsalis.ch<br><br>"
+        + _CORSALIS_DISCLAIMER_HTML
+    )
+
+
+def _get_signature_text(account: str, signature_variant: str = None) -> str:
     if account == "endolift@corsalis.ch":
-        return _endolift_signature(signature_variant or "medical")
-    return SIGNATURES.get(account, "")
+        return _endolift_signature_text(signature_variant or "medical")
+    return SIGNATURES_TEXT.get(account, "")
+
+
+def _get_signature_html(account: str, signature_variant: str = None) -> str:
+    if account == "endolift@corsalis.ch":
+        return _endolift_signature_html(signature_variant or "medical")
+    return SIGNATURES_HTML.get(account, "")
+
+
+# ---------------------------------------------------------------------------
+# Stile applicato dal connettore alla parte HTML dei messaggi. E' una
+# configurazione, non una costante sparsa nel codice: STYLE_DEFAULT vale
+# per tutte le caselle, STYLE_OVERRIDES permette di differenziare una
+# singola casella il giorno che servisse, senza toccare nient'altro.
+# ---------------------------------------------------------------------------
+
+STYLE_DEFAULT: dict = {
+    "font_family": "Verdana, Geneva, sans-serif",
+    "font_size": "small",
+    "color": "#666666",
+    "background_color": "#ffffff",
+}
+
+STYLE_OVERRIDES: dict[str, dict] = {
+    # Esempio per differenziare una casella in futuro, senza toccare il resto:
+    # "am.forte@almaval.ch": {"color": "#444444"},
+}
+
+
+def _get_style(account: str) -> dict:
+    style = dict(STYLE_DEFAULT)
+    style.update(STYLE_OVERRIDES.get(account, {}))
+    return style
+
+
+def _wrap_html(inner_html: str, account: str) -> str:
+    style = _get_style(account)
+    style_attr = (
+        f"font-family:{style['font_family']};"
+        f"font-size:{style['font_size']};"
+        f"color:{style['color']};"
+        f"background-color:{style['background_color']};"
+    )
+    return f'<div style="{style_attr}">{inner_html}</div>'
 
 
 # ---------------------------------------------------------------------------
@@ -235,13 +351,26 @@ def _build_mime(
     references: Optional[str] = None,
     signature_variant: Optional[str] = None,
     include_signature: bool = True,
+    html_body: Optional[str] = None,
 ) -> str:
-    full_body = body
-    signature = _get_signature(account, signature_variant) if include_signature else ""
-    if signature:
-        full_body = f"{body}\n\n{signature}"
+    text_signature = _get_signature_text(account, signature_variant) if include_signature else ""
+    full_text_body = body
+    if text_signature:
+        full_text_body = f"{body}\n\n{text_signature}"
 
-    message = MIMEText(full_body)
+    if html_body is not None:
+        html_signature = _get_signature_html(account, signature_variant) if include_signature else ""
+        inner_html = html_body
+        if html_signature:
+            inner_html = f"{html_body}<br><br>{html_signature}"
+        wrapped_html = _wrap_html(inner_html, account)
+
+        message = MIMEMultipart("alternative")
+        message.attach(MIMEText(full_text_body, "plain"))
+        message.attach(MIMEText(wrapped_html, "html"))
+    else:
+        message = MIMEText(full_text_body)
+
     message["to"] = to
     message["subject"] = subject
     if cc:
@@ -269,6 +398,7 @@ def send_email(
     cc: Optional[str] = None,
     bcc: Optional[str] = None,
     signature_variant: Optional[str] = None,
+    html_body: Optional[str] = None,
 ) -> dict:
     """
     Invia una nuova email da una delle caselle collegate. La firma ufficiale
@@ -278,9 +408,17 @@ def send_email(
     to, cc, bcc: indirizzi destinatari, separati da virgola se piu' di uno
     signature_variant: solo per endolift@corsalis.ch, una tra
         "logistics", "accounting", "medical" (default "medical")
+    html_body: se fornito, il messaggio viene inviato in multipart/alternative
+        con body come fallback testuale e html_body come parte HTML
+        principale. La parte HTML viene avvolta automaticamente nello
+        stile configurato per la casella (vedi STYLE_DEFAULT/STYLE_OVERRIDES),
+        non serve includere stile nel testo passato qui.
     """
     service = _gmail_service(account)
-    raw = _build_mime(to, subject, body, account, cc, bcc, signature_variant=signature_variant)
+    raw = _build_mime(
+        to, subject, body, account, cc, bcc,
+        signature_variant=signature_variant, html_body=html_body,
+    )
     sent = service.users().messages().send(userId="me", body={"raw": raw}).execute()
     return {"id": sent["id"], "threadId": sent["threadId"], "stato": "inviata"}
 
@@ -293,6 +431,7 @@ def create_draft(
     body: str,
     cc: Optional[str] = None,
     signature_variant: Optional[str] = None,
+    html_body: Optional[str] = None,
 ) -> dict:
     """
     Crea una bozza in una delle caselle collegate, senza inviarla. La firma
@@ -300,9 +439,16 @@ def create_draft(
 
     signature_variant: solo per endolift@corsalis.ch, una tra
         "logistics", "accounting", "medical" (default "medical")
+    html_body: se fornito, la bozza viene creata in multipart/alternative
+        con body come fallback testuale e html_body come parte HTML
+        principale, avvolta automaticamente nello stile configurato per
+        la casella.
     """
     service = _gmail_service(account)
-    raw = _build_mime(to, subject, body, account, cc, signature_variant=signature_variant)
+    raw = _build_mime(
+        to, subject, body, account, cc,
+        signature_variant=signature_variant, html_body=html_body,
+    )
     draft = service.users().drafts().create(userId="me", body={"message": {"raw": raw}}).execute()
     return {"id": draft["id"], "stato": "bozza creata"}
 
@@ -314,6 +460,7 @@ def reply_email(
     body: str,
     reply_all: bool = False,
     signature_variant: Optional[str] = None,
+    html_body: Optional[str] = None,
 ) -> dict:
     """
     Risponde a un'email esistente restando nello stesso thread. La firma
@@ -327,6 +474,10 @@ def reply_email(
         non solo al mittente
     signature_variant: solo per endolift@corsalis.ch, una tra
         "logistics", "accounting", "medical" (default "medical")
+    html_body: se fornito, la risposta viene inviata in multipart/alternative
+        con lo stesso involucro HTML usato per i nuovi messaggi, cosi' il
+        thread resta coerente invece di alternare messaggi formattati e
+        messaggi in solo testo.
     """
     service = _gmail_service(account)
     original = service.users().messages().get(
@@ -358,6 +509,7 @@ def reply_email(
         in_reply_to=headers.get("Message-ID"),
         references=references,
         signature_variant=signature_variant,
+        html_body=html_body,
     )
     sent = service.users().messages().send(
         userId="me", body={"raw": raw, "threadId": original["threadId"]}
