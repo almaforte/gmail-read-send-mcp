@@ -6,6 +6,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY gmail_send_mcp.py .
+COPY corsalis_logo.b64 .
 
 ENV PORT=3001
 EXPOSE 3001
