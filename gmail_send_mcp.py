@@ -559,15 +559,22 @@ def _build_mime(
 
     body, html_body = _strip_manual_closing(account, body, html_body)
 
+    # Una sola riga vuota separa il corpo dalla firma: le firme in
+    # SIGNATURES_TEXT/SIGNATURES_HTML iniziano gia' con il proprio "\n\n" /
+    # "<br><br>" prima della formula di chiusura ("Cordialement,\n\n..."),
+    # quindi qui si usa un solo "\n" / "<br>" di separazione, non due. Sommare
+    # un "\n\n"/"<br><br>" qui a quello gia' presente in testa alla firma
+    # produceva una doppia riga vuota prima di "Cordialement," (26.08.2026 +
+    # ricomparso 30.08.2026 su una firma con logo in mezzo).
     text_signature = _get_signature_text(account, signature_variant) if include_signature else ""
     full_text_body = body
     if text_signature:
-        full_text_body = f"{body}\n\n{text_signature}"
+        full_text_body = f"{body}\n{text_signature}"
 
     html_signature = _get_signature_html(account, signature_variant) if include_signature else ""
     inner_html = html_body
     if html_signature:
-        inner_html = f"{html_body}<br><br>{html_signature}"
+        inner_html = f"{html_body}<br>{html_signature}"
     wrapped_html = _wrap_html(inner_html, account)
 
     alt_part = MIMEMultipart("alternative")
