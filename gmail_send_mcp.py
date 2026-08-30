@@ -75,6 +75,7 @@ from pathlib import Path
 from typing import Optional
 
 from bs4 import BeautifulSoup
+from bs4 import NavigableString
 from cryptography.fernet import Fernet
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -516,9 +517,64 @@ def _inline_style(fragment: str, style: dict) -> str:
     return str(soup)
 
 
+# Tag di blocco che Gmail spazia gia' da soli con un margine verticale di
+# default. Un <br> (o una sequenza di <br>) messo a mano tra due di questi
+# tag si somma a quel margine e produce una doppia riga vuota visibile,
+# esattamente lo stesso problema gia' risolto tra corpo e firma
+# (30.08.2026), ma qui puo' capitare tra un paragrafo e il successivo,
+# scritto da chi compone il messaggio invece che dal codice del connettore.
+_BLOCK_SPACING_TAGS = {
+    "p", "div", "ul", "ol", "table", "blockquote",
+    "h1", "h2", "h3", "h4", "h5", "h6",
+}
+
+
+def _normalize_paragraph_spacing(fragment: str) -> str:
+    """
+    Toglie ogni sequenza di <br> (con eventuali spazi bianchi attorno) che
+    si trova direttamente tra due tag di blocco di primo livello nel
+    frammento. Non tocca un <br> che sta tra testo semplice e un tag di
+    blocco (es. il distacco tra html_body e la firma HTML, che comincia
+    con testo semplice prima del proprio "<br><br>"), ne' un <br> dentro
+    testo non strutturato: solo la spaziatura ridondante tra blocchi che
+    Gmail spazia gia' da soli.
+
+    Applicata prima di _inline_style, cosi' la spaziatura tra paragrafi
+    diventa un vincolo del connettore invece di dipendere da come ogni
+    singolo html_body e' stato scritto (vedi CONVENTIONS.md, 30.08.2026).
+    """
+    soup = BeautifulSoup(fragment, "html.parser")
+    nodes = list(soup.contents)
+    i = 0
+    while i < len(nodes):
+        node = nodes[i]
+        if getattr(node, "name", None) == "br":
+            prev_idx = i - 1
+            while prev_idx >= 0 and isinstance(nodes[prev_idx], NavigableString) and not nodes[prev_idx].strip():
+                prev_idx -= 1
+            j = i
+            while j < len(nodes) and (
+                getattr(nodes[j], "name", None) == "br"
+                or (isinstance(nodes[j], NavigableString) and not nodes[j].strip())
+            ):
+                j += 1
+            prev_is_block = prev_idx >= 0 and getattr(nodes[prev_idx], "name", None) in _BLOCK_SPACING_TAGS
+            next_is_block = j < len(nodes) and getattr(nodes[j], "name", None) in _BLOCK_SPACING_TAGS
+            if prev_is_block and next_is_block:
+                for k in range(i, j):
+                    nodes[k].extract()
+                nodes = list(soup.contents)
+                continue
+            i = j
+            continue
+        i += 1
+    return str(soup)
+
+
 def _wrap_html(inner_html: str, account: str) -> str:
     style = _get_style(account)
-    return f'<div style="{_style_attr(style)}">{_inline_style(inner_html, style)}</div>'
+    normalized = _normalize_paragraph_spacing(inner_html)
+    return f'<div style="{_style_attr(style)}">{_inline_style(normalized, style)}</div>'
 
 
 # ---------------------------------------------------------------------------
