@@ -16,34 +16,20 @@ parametro html_body. Il messaggio viene costruito in multipart/alternative:
 la versione testuale (body + firma testuale) resta come fallback, la
 versione HTML (html_body + firma HTML) e' la parte principale. html_body
 e' obbligatorio: non e' piu' possibile inviare o mettere in bozza un
-messaggio in solo testo semplice. Questo vincolo e' intenzionale (vedi
-Alberto, 30.08.2026): un client che dimentica html_body deve ricevere un
-errore esplicito al momento della chiamata, non produrre silenziosamente
-una mail poco curata.
+messaggio in solo testo semplice.
 
-Chiusura manuale duplicata: se chi scrive il messaggio include gia' una
-formula di chiusura scritta a mano (es. "Cordialement, Alberto") mentre
-l'account ha una firma ufficiale configurata, quella chiusura verrebbe
-seguita dalla firma vera, producendo un doppione visibile nel messaggio
-finale. _strip_manual_closing rileva ed elimina automaticamente questi
-pattern, sia nel testo semplice sia nell'HTML, prima di appendere la
-firma. La correzione e' automatica e silenziosa (nessun errore bloccante):
-l'obiettivo e' che il messaggio finale sia sempre corretto, non che chi
-scrive debba correggersi a mano ogni volta.
-
-Trattini lunghi: em dash (—), en dash (–) e trattino orizzontale (―) non
-sono mai ammessi in oggetto, corpo o html_body. _strip_long_dashes li
-sostituisce automaticamente con un trattino corto "-" prima di costruire
-il messaggio, con la stessa logica di correzione automatica e silenziosa
-usata per la chiusura manuale duplicata (vedi Alberto, 30.08.2026).
-
-Lo stile della parte HTML e' imposto dal connettore, non da chi scrive il
-messaggio: famiglia di carattere, dimensione e colore sono definiti in
-STYLE_DEFAULT/STYLE_OVERRIDES e vengono applicati tag per tag, sia al
-corpo sia alla firma, che dal punto di vista del messaggio e' solo la
-coda del corpo. L'applicazione tag per tag e' necessaria perche' Gmail
-trasmette il carattere di un div contenitore ai paragrafi ma lo perde
-sugli elenchi puntati e lo ignora nelle celle di tabella.
+Tutte le regole di formattazione (html_body obbligatorio, niente trattini
+lunghi, niente firma scritta a mano duplicata, una sola riga vuota tra
+paragrafi e prima della firma) NON sono piu' implementate qui: vivono nel
+pacchetto condiviso gmail_message_rules (vedi
+https://github.com/almaforte/gmail-message-rules), installato da questo
+requirements.txt sempre dall'ultima versione di main, cosi' che un
+aggiornamento a una regola si applichi a questo connettore e a qualunque
+altro repository di Alberto che invii email, senza bisogno di toccare
+questo file. Questo modulo si occupa solo di: OAuth, caselle e firme
+specifiche di queste caselle (incluso il logo Corsalis inline), le
+varianti endolift, e i tool MCP esposti. Vedi CONVENTIONS.md in
+gmail-message-rules per il perche' di ciascuna regola.
 
 Pagina di gestione account su /setup, protetta da ADMIN_PASSWORD via HTTP
 Basic Auth. Endpoint MCP su /mcp.
@@ -71,7 +57,6 @@ import base64
 import contextlib
 import json
 import os
-import re
 import secrets
 from email.mime.multipart import MIMEMultipart
 from email.mime.image import MIMEImage
@@ -80,8 +65,6 @@ from email.utils import getaddresses, formataddr
 from pathlib import Path
 from typing import Optional
 
-from bs4 import BeautifulSoup
-from bs4 import NavigableString
 from cryptography.fernet import Fernet
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -92,6 +75,8 @@ from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+
+from gmail_message_rules import build_message, HtmlBodyRequiredError
 
 # ---------------------------------------------------------------------------
 # Configurazione
@@ -356,136 +341,14 @@ def _get_signature_html(account: str, signature_variant: str = None) -> str:
     return SIGNATURES_HTML.get(account, "")
 
 
-def _has_signature_configured(account: str) -> bool:
-    return account == "endolift@corsalis.ch" or account in SIGNATURES_TEXT or account in SIGNATURES_HTML
-
-
-# ---------------------------------------------------------------------------
-# Rimozione automatica di una chiusura scritta a mano ("Cordialement,
-# Alberto", "Bien cordialement, Dr Forte...", "Bests, ...") quando la
-# casella ha gia' una firma ufficiale configurata. Senza questo controllo,
-# la chiusura manuale finisce seguita dalla firma vera, producendo un
-# doppione visibile nel messaggio (caso ricorrente del 30.08.2026).
-#
-# L'euristica taglia tutto cio' che segue una formula di chiusura nota,
-# purche' compaia nell'ultimo quarto del messaggio (una chiusura reale sta
-# in fondo, non all'inizio o nel mezzo di un paragrafo che la cita per
-# altri motivi). Non e' infallibile, ma copre le formule effettivamente in
-# uso su queste caselle e i loro equivalenti piu' comuni in francese,
-# italiano e inglese.
-# ---------------------------------------------------------------------------
-
-_CLOSING_PHRASES = [
-    "bien cordialement",
-    "cordialement",
-    "bests",
-    "best regards",
-    "kind regards",
-    "regards",
-    "cordiali saluti",
-    "distinti saluti",
-    "un cordiale saluto",
-]
-
-# Una riga di chiusura: la formula (con virgola o punto opzionali), poi il
-# resto del messaggio fino alla fine. re.IGNORECASE per non dipendere dalla
-# maiuscola iniziale, re.DOTALL perche' il "resto" attraversa piu' righe.
-_CLOSING_PATTERN_TEXT = re.compile(
-    r"(?im)^\s*(" + "|".join(_CLOSING_PHRASES) + r")\s*[,.:]?\s*\n.*\Z",
-    re.DOTALL,
-)
-
-# Versione HTML: stessa logica ma la formula puo' comparire dentro un tag
-# (<p>Cordialement,</p> o simile), quindi si cerca nel testo visibile di
-# ogni blocco verso la fine del frammento, non riga per riga.
-_CLOSING_PATTERN_HTML_BLOCK = re.compile(
-    r"(?is)<(p|div)[^>]*>\s*(" + "|".join(_CLOSING_PHRASES) + r")\s*[,.:]?\s*(<br\s*/?>)?\s*</\1>",
-)
-
-
-def _strip_manual_closing_text(body: str) -> str:
-    """
-    Toglie una formula di chiusura scritta a mano e tutto cio' che la
-    segue, solo se compare nell'ultimo quarto del testo (per non tagliare
-    per errore un paragrafo che cita "cordialement" a meta' messaggio).
-    """
-    if not body:
-        return body
-    match = _CLOSING_PATTERN_TEXT.search(body)
-    if not match:
-        return body
-    if match.start() < len(body) * 0.75:
-        return body
-    return body[: match.start()].rstrip()
-
-
-def _strip_manual_closing_html(html_body: str) -> str:
-    """
-    Equivalente HTML: rimuove il primo blocco (<p>/<div>) che contiene solo
-    una formula di chiusura nota, insieme a tutto cio' che lo segue nel
-    frammento, sempre limitato all'ultimo quarto del contenuto.
-    """
-    if not html_body:
-        return html_body
-    match = _CLOSING_PATTERN_HTML_BLOCK.search(html_body)
-    if not match:
-        return html_body
-    if match.start() < len(html_body) * 0.75:
-        return html_body
-    return html_body[: match.start()].rstrip()
-
-
-def _strip_manual_closing(account: str, body: str, html_body: str) -> tuple[str, str]:
-    """
-    Applica la pulizia della chiusura manuale a body e html_body, solo per
-    gli account che hanno una firma ufficiale configurata: su una casella
-    senza firma gestita non c'e' rischio di doppione, quindi il testo non
-    viene toccato.
-    """
-    if not _has_signature_configured(account):
-        return body, html_body
-    return _strip_manual_closing_text(body), _strip_manual_closing_html(html_body)
-
-
-# ---------------------------------------------------------------------------
-# Niente trattini lunghi (em dash, en dash, trattino orizzontale), mai, ne'
-# nell'oggetto ne' nel corpo del messaggio. Regola esplicita di Alberto
-# (30.08.2026), applicata qui esattamente come _strip_manual_closing:
-# correzione automatica e silenziosa, non un errore bloccante, perche' un
-# trattino lungo scivola facilmente in un testo scritto in fretta e non
-# deve fermare l'invio, deve solo essere sostituito prima che l'invio
-# avvenga.
-# ---------------------------------------------------------------------------
-
-_LONG_DASH_CHARS = "—–―"  # em dash, en dash, trattino orizzontale
-_LONG_DASH_PATTERN = re.compile(f"[{_LONG_DASH_CHARS}]")
-
-
-def _strip_long_dashes(text: str) -> str:
-    """
-    Sostituisce ogni trattino lungo con un trattino corto "-". Non tocca
-    nient'altro: non normalizza spazi, non tocca altri segni di
-    punteggiatura. Si applica a oggetto, corpo testuale e html_body,
-    perche' un trattino lungo puo' comparire ovunque in un testo scritto
-    di getto.
-    """
-    if not text:
-        return text
-    return _LONG_DASH_PATTERN.sub("-", text)
-
-
 # ---------------------------------------------------------------------------
 # Stile applicato dal connettore alla parte HTML dei messaggi. E' una
 # configurazione, non una costante sparsa nel codice: STYLE_DEFAULT vale
 # per tutte le caselle, STYLE_OVERRIDES permette di differenziare una
 # singola casella il giorno che servisse, senza toccare nient'altro.
-#
-# Lo stile viene applicato due volte: una sul div contenitore, per i
-# frammenti di testo nudo, e una tag per tag su tutto cio' che ha una
-# struttura. Il secondo passaggio non e' ridondante: Gmail trasmette il
-# carattere del contenitore ai paragrafi, lo perde sugli <li> e lo ignora
-# nelle celle di tabella. Senza di esso un elenco puntato o una tabella di
-# importi esce in Arial nero in mezzo a un messaggio in Verdana grigio.
+# Il valore di STYLE_DEFAULT resta identico a quello predefinito in
+# gmail_message_rules.DEFAULT_STYLE; e' scritto qui per esplicitezza e
+# per poter essere modificato senza toccare il pacchetto condiviso.
 # ---------------------------------------------------------------------------
 
 STYLE_DEFAULT: dict = {
@@ -499,134 +362,11 @@ STYLE_OVERRIDES: dict[str, dict] = {
     # "am.forte@almaval.ch": {"color": "#444444"},
 }
 
-# Tag ai quali lo stile viene imposto uno per uno. Le immagini sono escluse
-# di proposito. I link ricevono carattere e dimensione ma non il colore,
-# cosi' restano blu e riconoscibili come link.
-_STYLED_TAGS = [
-    "p", "div", "span", "li", "ul", "ol",
-    "table", "thead", "tbody", "tr", "td", "th",
-    "h1", "h2", "h3", "h4", "h5", "h6",
-    "blockquote", "b", "strong", "em", "i", "u", "small", "pre", "code",
-]
-
 
 def _get_style(account: str) -> dict:
     style = dict(STYLE_DEFAULT)
     style.update(STYLE_OVERRIDES.get(account, {}))
     return style
-
-
-def _style_attr(style: dict) -> str:
-    return (
-        f"font-family:{style['font_family']};"
-        f"font-size:{style['font_size']};"
-        f"color:{style['color']};"
-    )
-
-
-def _link_attr(style: dict) -> str:
-    return (
-        f"font-family:{style['font_family']};"
-        f"font-size:{style['font_size']};"
-    )
-
-
-def _inline_style(fragment: str, style: dict) -> str:
-    """
-    Impone lo stile della casella a ogni tag di blocco del frammento HTML.
-    Lo stile del connettore viene messo PRIMA di un eventuale stile gia'
-    presente sul tag: in CSS in linea vince l'ultima dichiarazione, quindi
-    un'eccezione scritta a mano nel messaggio resta prioritaria.
-    """
-    soup = BeautifulSoup(fragment, "html.parser")
-    attr = _style_attr(style)
-    for tag in soup.find_all(_STYLED_TAGS):
-        existing = tag.get("style", "")
-        tag["style"] = attr + existing
-    link_attr = _link_attr(style)
-    for tag in soup.find_all("a"):
-        existing = tag.get("style", "")
-        tag["style"] = link_attr + existing
-    return str(soup)
-
-
-# Tag di blocco che Gmail spazia gia' da soli con un margine verticale di
-# default. Un <br> (o una sequenza di <br>) messo a mano tra due di questi
-# tag si somma a quel margine e produce una doppia riga vuota visibile,
-# esattamente lo stesso problema gia' risolto tra corpo e firma
-# (30.08.2026), ma qui puo' capitare tra un paragrafo e il successivo,
-# scritto da chi compone il messaggio invece che dal codice del connettore.
-_BLOCK_SPACING_TAGS = {
-    "p", "div", "ul", "ol", "table", "blockquote",
-    "h1", "h2", "h3", "h4", "h5", "h6",
-}
-
-
-def _ends_with_block_tag(fragment: str) -> bool:
-    """
-    True se l'ultimo nodo di primo livello del frammento (spazi bianchi a
-    parte) e' uno dei tag in _BLOCK_SPACING_TAGS. Serve a decidere se un
-    <br> di separazione verso cio' che segue e' ridondante: un </p>
-    porta gia' il proprio margine inferiore, quindi un <br> subito dopo
-    produce comunque una riga vuota in piu', anche se dall'altra parte
-    del <br> non c'e' un altro tag di blocco ma testo semplice (il caso
-    della firma HTML, che comincia con "Cordialement," in chiaro).
-    """
-    soup = BeautifulSoup(fragment, "html.parser")
-    nodes = list(soup.contents)
-    while nodes and isinstance(nodes[-1], NavigableString) and not nodes[-1].strip():
-        nodes.pop()
-    if not nodes:
-        return False
-    return getattr(nodes[-1], "name", None) in _BLOCK_SPACING_TAGS
-
-
-def _normalize_paragraph_spacing(fragment: str) -> str:
-    """
-    Toglie ogni sequenza di <br> (con eventuali spazi bianchi attorno) che
-    si trova direttamente tra due tag di blocco di primo livello nel
-    frammento. Non tocca un <br> che sta tra testo semplice e un tag di
-    blocco (es. il distacco tra html_body e la firma HTML, che comincia
-    con testo semplice prima del proprio "<br><br>"), ne' un <br> dentro
-    testo non strutturato: solo la spaziatura ridondante tra blocchi che
-    Gmail spazia gia' da soli.
-
-    Applicata prima di _inline_style, cosi' la spaziatura tra paragrafi
-    diventa un vincolo del connettore invece di dipendere da come ogni
-    singolo html_body e' stato scritto (vedi CONVENTIONS.md, 30.08.2026).
-    """
-    soup = BeautifulSoup(fragment, "html.parser")
-    nodes = list(soup.contents)
-    i = 0
-    while i < len(nodes):
-        node = nodes[i]
-        if getattr(node, "name", None) == "br":
-            prev_idx = i - 1
-            while prev_idx >= 0 and isinstance(nodes[prev_idx], NavigableString) and not nodes[prev_idx].strip():
-                prev_idx -= 1
-            j = i
-            while j < len(nodes) and (
-                getattr(nodes[j], "name", None) == "br"
-                or (isinstance(nodes[j], NavigableString) and not nodes[j].strip())
-            ):
-                j += 1
-            prev_is_block = prev_idx >= 0 and getattr(nodes[prev_idx], "name", None) in _BLOCK_SPACING_TAGS
-            next_is_block = j < len(nodes) and getattr(nodes[j], "name", None) in _BLOCK_SPACING_TAGS
-            if prev_is_block and next_is_block:
-                for k in range(i, j):
-                    nodes[k].extract()
-                nodes = list(soup.contents)
-                continue
-            i = j
-            continue
-        i += 1
-    return str(soup)
-
-
-def _wrap_html(inner_html: str, account: str) -> str:
-    style = _get_style(account)
-    normalized = _normalize_paragraph_spacing(inner_html)
-    return f'<div style="{_style_attr(style)}">{_inline_style(normalized, style)}</div>'
 
 
 # ---------------------------------------------------------------------------
@@ -659,50 +399,27 @@ def _build_mime(
     include_signature: bool = True,
     html_body: str = "",
 ) -> str:
-    if not html_body:
-        raise ValueError(
-            "html_body e' obbligatorio: fornisci il corpo del messaggio in HTML "
-            "(paragrafi <p>, eventuali <strong>/<ol>/<ul>), non solo in testo semplice."
+    signature_text = _get_signature_text(account, signature_variant) if include_signature else ""
+    signature_html = _get_signature_html(account, signature_variant) if include_signature else ""
+
+    # Tutte le regole (html_body obbligatorio, niente trattini lunghi,
+    # niente firma duplicata, spaziatura corretta) sono applicate qui da
+    # gmail_message_rules.build_message, non riscritte in questo file.
+    try:
+        built = build_message(
+            subject=subject,
+            body=body,
+            html_body=html_body,
+            signature_text=signature_text,
+            signature_html=signature_html,
+            style=_get_style(account),
         )
-
-    subject = _strip_long_dashes(subject)
-    body = _strip_long_dashes(body)
-    html_body = _strip_long_dashes(html_body)
-
-    body, html_body = _strip_manual_closing(account, body, html_body)
-
-    # Una sola riga vuota separa il corpo dalla firma: le firme in
-    # SIGNATURES_TEXT/SIGNATURES_HTML iniziano gia' con il proprio "\n\n" /
-    # "<br><br>" prima della formula di chiusura ("Cordialement,\n\n..."),
-    # quindi qui si usa un solo "\n" / "<br>" di separazione, non due. Sommare
-    # un "\n\n"/"<br><br>" qui a quello gia' presente in testa alla firma
-    # produceva una doppia riga vuota prima di "Cordialement," (26.08.2026 +
-    # ricomparso 30.08.2026 su una firma con logo in mezzo).
-    text_signature = _get_signature_text(account, signature_variant) if include_signature else ""
-    full_text_body = body
-    if text_signature:
-        full_text_body = f"{body}\n{text_signature}"
-
-    html_signature = _get_signature_html(account, signature_variant) if include_signature else ""
-    inner_html = html_body
-    if html_signature:
-        # Se html_body finisce con un tag di blocco (</p>, </div>, ...),
-        # quel tag porta gia' il proprio margine inferiore: un <br> subito
-        # dopo si somma a quel margine e produce una riga vuota di troppo
-        # prima di "Cordialement," (osservato di nuovo il 30.08.2026, dopo
-        # il primo fix del 26.08, proprio perche' quel fix copriva solo il
-        # caso "<br><br>" -> "<br>", non il caso "un <br> comunque
-        # ridondante quando il corpo finisce gia' in un tag di blocco").
-        # Se invece html_body finisce in testo semplice (nessun tag di
-        # blocco), serve ancora un <br> esplicito per andare a capo prima
-        # della firma.
-        separator = "" if _ends_with_block_tag(html_body) else "<br>"
-        inner_html = f"{html_body}{separator}{html_signature}"
-    wrapped_html = _wrap_html(inner_html, account)
+    except HtmlBodyRequiredError as exc:
+        raise ValueError(str(exc))
 
     alt_part = MIMEMultipart("alternative")
-    alt_part.attach(MIMEText(full_text_body, "plain"))
-    alt_part.attach(MIMEText(wrapped_html, "html"))
+    alt_part.attach(MIMEText(built["text_body"], "plain"))
+    alt_part.attach(MIMEText(built["html_body"], "html"))
 
     logo_cid = _ACCOUNT_LOGO_CID.get(account) if include_signature else None
     # Se il logo non e' disponibile, la firma esce senza immagine invece
@@ -719,7 +436,7 @@ def _build_mime(
         message = alt_part
 
     message["to"] = to
-    message["subject"] = subject
+    message["subject"] = built["subject"]
     if cc:
         message["cc"] = cc
     if bcc:
