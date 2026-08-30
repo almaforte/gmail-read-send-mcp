@@ -63,6 +63,53 @@ Limiti noti di questa euristica, da tenere a mente se va estesa:
   misura di sicurezza, solo come rete di protezione contro l'errore piu'
   comune osservato in pratica.
 
+## Uno spazio solo tra il corpo e la firma
+
+`SIGNATURES_TEXT` e `SIGNATURES_HTML` iniziano gia' con il proprio
+distacco iniziale prima della formula di chiusura ("Cordialement,\n\n..."
+in testo, "Cordialement,<br><br>..." in HTML). `_build_mime` unisce corpo
+e firma con un solo `"\n"` / `"<br>"` di separazione, non con `"\n\n"` /
+`"<br><br>"`: sommare un secondo separatore a quello gia' presente in
+testa alla firma produce una doppia riga vuota visibile prima di
+"Cordialement," (bug osservato il 26.08.2026 e di nuovo il 30.08.2026, su
+una firma con logo intercalato che lo rendeva meno evidente a colpo
+d'occhio). Se in futuro cambia il formato di una firma in
+`SIGNATURES_TEXT`/`SIGNATURES_HTML`, va mantenuta la convenzione che la
+firma stessa porta il proprio spazio di apertura, non chi la usa.
+
+## Spaziatura tra i paragrafi del corpo: NON ancora imposta dal codice
+
+Punto importante da capire bene, perche' e' diverso dai due precedenti: la
+regola "una sola riga vuota tra un paragrafo e l'altro" per il momento
+**non e'** un vincolo di `gmail_send_mcp.py`. Il connettore impone stile
+tipografico (famiglia di carattere, dimensione, colore, tramite
+`_inline_style`) ma non tocca margini, interlinea o spaziatura verticale:
+non aggiunge `<br>` tra i paragrafi di `html_body`, non li toglie, non
+normalizza in alcun modo quanti ce ne sono.
+
+Questo significa che la spaziatura tra i paragrafi dipende interamente da
+come chi scrive il messaggio costruisce `html_body`:
+
+- Paragrafi scritti come `<p>...</p><p>...</p>` consecutivi vengono
+  renderizzati da Gmail con la propria spaziatura verticale di default tra
+  blocchi `<p>` (tipicamente equivalente a una riga vuota), senza bisogno
+  di `<br>` espliciti tra un tag e l'altro.
+- Aggiungere `<br><br>` tra un `</p>` e il `<p>` successivo, oltre al
+  margine gia' applicato da Gmail ai blocchi `<p>`, produce una doppia riga
+  vuota, lo stesso tipo di errore visto tra corpo e firma.
+- Un `html_body` che usa `<br>` invece di `<p>` per separare i paragrafi
+  (una sola stringa con `<br><br>` tra i blocchi di testo) e' un formato
+  valido, ma la spaziatura risultante dipende dal numero di `<br>` messi a
+  mano, non da una regola imposta dal connettore.
+
+Finche' questa parte non diventa anch'essa un vincolo di codice (es. una
+normalizzazione automatica in `_wrap_html`/`_inline_style` che forzi la
+spaziatura tra blocchi `<p>` consecutivi indipendentemente da come sono
+stati scritti), resta una convenzione di scrittura, non una garanzia
+tecnica: chi compone `html_body` deve usare `<p>` per ogni paragrafo,
+senza `<br>` aggiuntivi tra un `<p>` e il successivo, e verificare il
+risultato prima di considerare una bozza pronta.
+
 ## Perche' queste regole sono nel codice e non solo qui
 
 Prima di questa versione, le stesse due regole vivevano solo come
