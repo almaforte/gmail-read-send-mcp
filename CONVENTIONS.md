@@ -14,10 +14,15 @@ trattino medio "en dash". Se serve una pausa o un inciso, si usa una
 virgola, due punti, o una frase separata, non un trattino lungo.
 
 Regola esplicita di Alberto (30.08.2026), dopo averla vista comparire nel
-titolo di una bozza di prova. Non e' ancora imposta a livello di codice
-(nessun controllo automatico la applica o la corregge), resta per ora una
-regola di scrittura da rispettare a mano quando si compone un messaggio o
-si modifica questo repository.
+titolo di una bozza di prova. E' imposta a livello di codice da
+`_strip_long_dashes`, chiamata all'inizio di `_build_mime` su `subject`,
+`body` e `html_body` prima di qualunque altra elaborazione: ogni em dash
+(—), en dash (–) o trattino orizzontale (―) viene sostituito con un
+trattino corto "-" in automatico e in silenzio, senza bloccare la
+chiamata, con la stessa logica gia' usata per `_strip_manual_closing`. Per
+il testo di questo repository (README, questo file, messaggi di commit)
+resta invece una regola di scrittura da rispettare a mano, perche' quel
+testo non passa da `_build_mime`.
 
 ## html_body e' obbligatorio
 
