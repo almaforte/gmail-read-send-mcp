@@ -11,11 +11,25 @@ mittente, se configurata. La casella endolift@corsalis.ch ha tre varianti
 di firma selezionabili con il parametro signature_variant ("logistics",
 "accounting", "medical", che e' il valore predefinito).
 
-Formattazione HTML: send_email, create_draft e reply_email accettano un
-parametro opzionale html_body. Quando e' presente, il messaggio viene
-costruito in multipart/alternative: la versione testuale (body + firma
-testuale) resta come fallback, la versione HTML (html_body + firma HTML)
-diventa la parte principale.
+Formattazione HTML: send_email, create_draft e reply_email richiedono un
+parametro html_body. Il messaggio viene costruito in multipart/alternative:
+la versione testuale (body + firma testuale) resta come fallback, la
+versione HTML (html_body + firma HTML) e' la parte principale. html_body
+e' obbligatorio: non e' piu' possibile inviare o mettere in bozza un
+messaggio in solo testo semplice. Questo vincolo e' intenzionale (vedi
+Alberto, 30.08.2026): un client che dimentica html_body deve ricevere un
+errore esplicito al momento della chiamata, non produrre silenziosamente
+una mail poco curata.
+
+Chiusura manuale duplicata: se chi scrive il messaggio include gia' una
+formula di chiusura scritta a mano (es. "Cordialement, Alberto") mentre
+l'account ha una firma ufficiale configurata, quella chiusura verrebbe
+seguita dalla firma vera, producendo un doppione visibile nel messaggio
+finale. _strip_manual_closing rileva ed elimina automaticamente questi
+pattern, sia nel testo semplice sia nell'HTML, prima di appendere la
+firma. La correzione e' automatica e silenziosa (nessun errore bloccante):
+l'obiettivo e' che il messaggio finale sia sempre corretto, non che chi
+scrive debba correggersi a mano ogni volta.
 
 Lo stile della parte HTML e' imposto dal connettore, non da chi scrive il
 messaggio: famiglia di carattere, dimensione e colore sono definiti in
@@ -51,6 +65,7 @@ import base64
 import contextlib
 import json
 import os
+import re
 import secrets
 from email.mime.multipart import MIMEMultipart
 from email.mime.image import MIMEImage
@@ -334,6 +349,97 @@ def _get_signature_html(account: str, signature_variant: str = None) -> str:
     return SIGNATURES_HTML.get(account, "")
 
 
+def _has_signature_configured(account: str) -> bool:
+    return account == "endolift@corsalis.ch" or account in SIGNATURES_TEXT or account in SIGNATURES_HTML
+
+
+# ---------------------------------------------------------------------------
+# Rimozione automatica di una chiusura scritta a mano ("Cordialement,
+# Alberto", "Bien cordialement, Dr Forte...", "Bests, ...") quando la
+# casella ha gia' una firma ufficiale configurata. Senza questo controllo,
+# la chiusura manuale finisce seguita dalla firma vera, producendo un
+# doppione visibile nel messaggio (caso ricorrente del 30.08.2026).
+#
+# L'euristica taglia tutto cio' che segue una formula di chiusura nota,
+# purche' compaia nell'ultimo quarto del messaggio (una chiusura reale sta
+# in fondo, non all'inizio o nel mezzo di un paragrafo che la cita per
+# altri motivi). Non e' infallibile, ma copre le formule effettivamente in
+# uso su queste caselle e i loro equivalenti piu' comuni in francese,
+# italiano e inglese.
+# ---------------------------------------------------------------------------
+
+_CLOSING_PHRASES = [
+    "bien cordialement",
+    "cordialement",
+    "bests",
+    "best regards",
+    "kind regards",
+    "regards",
+    "cordiali saluti",
+    "distinti saluti",
+    "un cordiale saluto",
+]
+
+# Una riga di chiusura: la formula (con virgola o punto opzionali), poi il
+# resto del messaggio fino alla fine. re.IGNORECASE per non dipendere dalla
+# maiuscola iniziale, re.DOTALL perche' il "resto" attraversa piu' righe.
+_CLOSING_PATTERN_TEXT = re.compile(
+    r"(?im)^\s*(" + "|".join(_CLOSING_PHRASES) + r")\s*[,.:]?\s*\n.*\Z",
+    re.DOTALL,
+)
+
+# Versione HTML: stessa logica ma la formula puo' comparire dentro un tag
+# (<p>Cordialement,</p> o simile), quindi si cerca nel testo visibile di
+# ogni blocco verso la fine del frammento, non riga per riga.
+_CLOSING_PATTERN_HTML_BLOCK = re.compile(
+    r"(?is)<(p|div)[^>]*>\s*(" + "|".join(_CLOSING_PHRASES) + r")\s*[,.:]?\s*(<br\s*/?>)?\s*</\1>",
+)
+
+
+def _strip_manual_closing_text(body: str) -> str:
+    """
+    Toglie una formula di chiusura scritta a mano e tutto cio' che la
+    segue, solo se compare nell'ultimo quarto del testo (per non tagliare
+    per errore un paragrafo che cita "cordialement" a meta' messaggio).
+    """
+    if not body:
+        return body
+    match = _CLOSING_PATTERN_TEXT.search(body)
+    if not match:
+        return body
+    if match.start() < len(body) * 0.75:
+        return body
+    return body[: match.start()].rstrip()
+
+
+def _strip_manual_closing_html(html_body: str) -> str:
+    """
+    Equivalente HTML: rimuove il primo blocco (<p>/<div>) che contiene solo
+    una formula di chiusura nota, insieme a tutto cio' che lo segue nel
+    frammento, sempre limitato all'ultimo quarto del contenuto.
+    """
+    if not html_body:
+        return html_body
+    match = _CLOSING_PATTERN_HTML_BLOCK.search(html_body)
+    if not match:
+        return html_body
+    if match.start() < len(html_body) * 0.75:
+        return html_body
+    return html_body[: match.start()].rstrip()
+
+
+def _strip_manual_closing(account: str, body: str, html_body: str) -> tuple[str, str]:
+    """
+    Applica la pulizia della chiusura manuale a body e html_body, solo per
+    gli account che hanno una firma ufficiale configurata: su una casella
+    senza firma gestita non c'e' rischio di doppione, quindi il testo non
+    viene toccato.
+    """
+    if not _has_signature_configured(account):
+        return body, html_body
+    return _strip_manual_closing_text(body), _strip_manual_closing_html(html_body)
+
+
 # ---------------------------------------------------------------------------
 # Stile applicato dal connettore alla parte HTML dei messaggi. E' una
 # configurazione, non una costante sparsa nel codice: STYLE_DEFAULT vale
@@ -443,39 +549,44 @@ def _build_mime(
     references: Optional[str] = None,
     signature_variant: Optional[str] = None,
     include_signature: bool = True,
-    html_body: Optional[str] = None,
+    html_body: str = "",
 ) -> str:
+    if not html_body:
+        raise ValueError(
+            "html_body e' obbligatorio: fornisci il corpo del messaggio in HTML "
+            "(paragrafi <p>, eventuali <strong>/<ol>/<ul>), non solo in testo semplice."
+        )
+
+    body, html_body = _strip_manual_closing(account, body, html_body)
+
     text_signature = _get_signature_text(account, signature_variant) if include_signature else ""
     full_text_body = body
     if text_signature:
         full_text_body = f"{body}\n\n{text_signature}"
 
-    if html_body is not None:
-        html_signature = _get_signature_html(account, signature_variant) if include_signature else ""
-        inner_html = html_body
-        if html_signature:
-            inner_html = f"{html_body}<br><br>{html_signature}"
-        wrapped_html = _wrap_html(inner_html, account)
+    html_signature = _get_signature_html(account, signature_variant) if include_signature else ""
+    inner_html = html_body
+    if html_signature:
+        inner_html = f"{html_body}<br><br>{html_signature}"
+    wrapped_html = _wrap_html(inner_html, account)
 
-        alt_part = MIMEMultipart("alternative")
-        alt_part.attach(MIMEText(full_text_body, "plain"))
-        alt_part.attach(MIMEText(wrapped_html, "html"))
+    alt_part = MIMEMultipart("alternative")
+    alt_part.attach(MIMEText(full_text_body, "plain"))
+    alt_part.attach(MIMEText(wrapped_html, "html"))
 
-        logo_cid = _ACCOUNT_LOGO_CID.get(account) if include_signature else None
-        # Se il logo non e' disponibile, la firma esce senza immagine invece
-        # di far fallire l'invio.
-        if logo_cid and _INLINE_LOGOS.get(logo_cid):
-            message = MIMEMultipart("related")
-            message.attach(alt_part)
-            image_bytes = base64.b64decode(_INLINE_LOGOS[logo_cid])
-            image_part = MIMEImage(image_bytes, _subtype="png")
-            image_part.add_header("Content-ID", f"<{logo_cid}>")
-            image_part.add_header("Content-Disposition", "inline", filename=f"{logo_cid}.png")
-            message.attach(image_part)
-        else:
-            message = alt_part
+    logo_cid = _ACCOUNT_LOGO_CID.get(account) if include_signature else None
+    # Se il logo non e' disponibile, la firma esce senza immagine invece
+    # di far fallire l'invio.
+    if logo_cid and _INLINE_LOGOS.get(logo_cid):
+        message = MIMEMultipart("related")
+        message.attach(alt_part)
+        image_bytes = base64.b64decode(_INLINE_LOGOS[logo_cid])
+        image_part = MIMEImage(image_bytes, _subtype="png")
+        image_part.add_header("Content-ID", f"<{logo_cid}>")
+        image_part.add_header("Content-Disposition", "inline", filename=f"{logo_cid}.png")
+        message.attach(image_part)
     else:
-        message = MIMEText(full_text_body)
+        message = alt_part
 
     message["to"] = to
     message["subject"] = subject
@@ -730,10 +841,10 @@ def send_email(
     to: str,
     subject: str,
     body: str,
+    html_body: str,
     cc: Optional[str] = None,
     bcc: Optional[str] = None,
     signature_variant: Optional[str] = None,
-    html_body: Optional[str] = None,
 ) -> dict:
     """
     Invia una nuova email da una delle caselle collegate. La firma ufficiale
@@ -743,10 +854,16 @@ def send_email(
     to, cc, bcc: indirizzi destinatari, separati da virgola se piu' di uno
     signature_variant: solo per endolift@corsalis.ch, una tra
         "logistics", "accounting", "medical" (default "medical")
-    html_body: se fornito, il messaggio viene inviato in multipart/alternative
-        con body come fallback testuale e html_body come parte HTML
-        principale. Lo stile (Verdana 10px #666666) viene imposto dal
-        connettore a corpo e firma, non serve indicarlo qui.
+    html_body: OBBLIGATORIO. Il messaggio viene sempre inviato in
+        multipart/alternative, con body come fallback testuale e html_body
+        come parte HTML principale (paragrafi <p>, eventuali <strong>,
+        <ol>/<ul>). Lo stile (Verdana 10px #666666) viene imposto dal
+        connettore a corpo e firma, non serve indicarlo qui. Non includere
+        una formula di chiusura scritta a mano (es. "Cordialement,
+        Alberto"): la firma ufficiale della casella viene aggiunta in
+        automatico, e una eventuale chiusura manuale rilevata in fondo al
+        messaggio viene comunque tolta prima dell'invio per evitare un
+        doppione.
     """
     service = _gmail_service(account)
     raw = _build_mime(
@@ -761,11 +878,11 @@ def send_email(
 def create_draft(
     account: str,
     body: str,
+    html_body: str,
     subject: Optional[str] = None,
     to: Optional[str] = None,
     cc: Optional[str] = None,
     signature_variant: Optional[str] = None,
-    html_body: Optional[str] = None,
     reply_to_message_id: Optional[str] = None,
     reply_all: bool = True,
 ) -> dict:
@@ -784,10 +901,13 @@ def create_draft(
     subject, to: obbligatori solo se reply_to_message_id non e' fornito.
     signature_variant: solo per endolift@corsalis.ch, una tra
         "logistics", "accounting", "medical" (default "medical")
-    html_body: se fornito, la bozza viene creata in multipart/alternative
-        con body come fallback testuale e html_body come parte HTML
-        principale. Lo stile (Verdana 10px #666666) viene imposto dal
-        connettore a corpo e firma.
+    html_body: OBBLIGATORIO. La bozza viene sempre creata in
+        multipart/alternative, con body come fallback testuale e html_body
+        come parte HTML principale. Lo stile (Verdana 10px #666666) viene
+        imposto dal connettore a corpo e firma. Non includere una formula
+        di chiusura scritta a mano: la firma ufficiale viene aggiunta in
+        automatico, e una chiusura manuale rilevata in fondo al messaggio
+        viene comunque tolta prima di creare la bozza.
     """
     service = _gmail_service(account)
 
@@ -836,9 +956,9 @@ def reply_email(
     account: str,
     message_id: str,
     body: str,
+    html_body: str,
     reply_all: bool = False,
     signature_variant: Optional[str] = None,
-    html_body: Optional[str] = None,
 ) -> dict:
     """
     Risponde a un'email esistente restando nello stesso thread. La firma
@@ -851,10 +971,13 @@ def reply_email(
         non solo al mittente
     signature_variant: solo per endolift@corsalis.ch, una tra
         "logistics", "accounting", "medical" (default "medical")
-    html_body: se fornito, la risposta viene inviata in multipart/alternative
-        con lo stesso stile usato per i nuovi messaggi, cosi' il thread
-        resta coerente invece di alternare messaggi formattati e messaggi
-        in solo testo.
+    html_body: OBBLIGATORIO. La risposta viene sempre inviata in
+        multipart/alternative con lo stesso stile usato per i nuovi
+        messaggi, cosi' il thread resta coerente invece di alternare
+        messaggi formattati e messaggi in solo testo. Non includere una
+        formula di chiusura scritta a mano: la firma ufficiale viene
+        aggiunta in automatico, e una chiusura manuale rilevata in fondo
+        al messaggio viene comunque tolta prima dell'invio.
     """
     service = _gmail_service(account)
     ctx = _reply_context(service, account, message_id, reply_all=reply_all)
