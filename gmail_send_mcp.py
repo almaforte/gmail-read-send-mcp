@@ -31,6 +31,12 @@ firma. La correzione e' automatica e silenziosa (nessun errore bloccante):
 l'obiettivo e' che il messaggio finale sia sempre corretto, non che chi
 scrive debba correggersi a mano ogni volta.
 
+Trattini lunghi: em dash (—), en dash (–) e trattino orizzontale (―) non
+sono mai ammessi in oggetto, corpo o html_body. _strip_long_dashes li
+sostituisce automaticamente con un trattino corto "-" prima di costruire
+il messaggio, con la stessa logica di correzione automatica e silenziosa
+usata per la chiusura manuale duplicata (vedi Alberto, 30.08.2026).
+
 Lo stile della parte HTML e' imposto dal connettore, non da chi scrive il
 messaggio: famiglia di carattere, dimensione e colore sono definiti in
 STYLE_DEFAULT/STYLE_OVERRIDES e vengono applicati tag per tag, sia al
@@ -442,6 +448,33 @@ def _strip_manual_closing(account: str, body: str, html_body: str) -> tuple[str,
 
 
 # ---------------------------------------------------------------------------
+# Niente trattini lunghi (em dash, en dash, trattino orizzontale), mai, ne'
+# nell'oggetto ne' nel corpo del messaggio. Regola esplicita di Alberto
+# (30.08.2026), applicata qui esattamente come _strip_manual_closing:
+# correzione automatica e silenziosa, non un errore bloccante, perche' un
+# trattino lungo scivola facilmente in un testo scritto in fretta e non
+# deve fermare l'invio, deve solo essere sostituito prima che l'invio
+# avvenga.
+# ---------------------------------------------------------------------------
+
+_LONG_DASH_CHARS = "—–―"  # em dash, en dash, trattino orizzontale
+_LONG_DASH_PATTERN = re.compile(f"[{_LONG_DASH_CHARS}]")
+
+
+def _strip_long_dashes(text: str) -> str:
+    """
+    Sostituisce ogni trattino lungo con un trattino corto "-". Non tocca
+    nient'altro: non normalizza spazi, non tocca altri segni di
+    punteggiatura. Si applica a oggetto, corpo testuale e html_body,
+    perche' un trattino lungo puo' comparire ovunque in un testo scritto
+    di getto.
+    """
+    if not text:
+        return text
+    return _LONG_DASH_PATTERN.sub("-", text)
+
+
+# ---------------------------------------------------------------------------
 # Stile applicato dal connettore alla parte HTML dei messaggi. E' una
 # configurazione, non una costante sparsa nel codice: STYLE_DEFAULT vale
 # per tutte le caselle, STYLE_OVERRIDES permette di differenziare una
@@ -631,6 +664,10 @@ def _build_mime(
             "html_body e' obbligatorio: fornisci il corpo del messaggio in HTML "
             "(paragrafi <p>, eventuali <strong>/<ol>/<ul>), non solo in testo semplice."
         )
+
+    subject = _strip_long_dashes(subject)
+    body = _strip_long_dashes(body)
+    html_body = _strip_long_dashes(html_body)
 
     body, html_body = _strip_manual_closing(account, body, html_body)
 
@@ -956,7 +993,9 @@ def send_email(
         Alberto"): la firma ufficiale della casella viene aggiunta in
         automatico, e una eventuale chiusura manuale rilevata in fondo al
         messaggio viene comunque tolta prima dell'invio per evitare un
-        doppione.
+        doppione. Non includere trattini lunghi (em dash, en dash):
+        vengono comunque sostituiti con un trattino corto prima
+        dell'invio, ma e' piu' pulito scriverli gia' cosi'.
     """
     service = _gmail_service(account)
     raw = _build_mime(
@@ -1000,7 +1039,10 @@ def create_draft(
         imposto dal connettore a corpo e firma. Non includere una formula
         di chiusura scritta a mano: la firma ufficiale viene aggiunta in
         automatico, e una chiusura manuale rilevata in fondo al messaggio
-        viene comunque tolta prima di creare la bozza.
+        viene comunque tolta prima di creare la bozza. Non includere
+        trattini lunghi (em dash, en dash): vengono comunque sostituiti
+        con un trattino corto prima di creare la bozza, ma e' piu' pulito
+        scriverli gia' cosi'.
     """
     service = _gmail_service(account)
 
@@ -1070,7 +1112,10 @@ def reply_email(
         messaggi formattati e messaggi in solo testo. Non includere una
         formula di chiusura scritta a mano: la firma ufficiale viene
         aggiunta in automatico, e una chiusura manuale rilevata in fondo
-        al messaggio viene comunque tolta prima dell'invio.
+        al messaggio viene comunque tolta prima dell'invio. Non includere
+        trattini lunghi (em dash, en dash): vengono comunque sostituiti
+        con un trattino corto prima dell'invio, ma e' piu' pulito
+        scriverli gia' cosi'.
     """
     service = _gmail_service(account)
     ctx = _reply_context(service, account, message_id, reply_all=reply_all)
