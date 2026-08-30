@@ -5,6 +5,20 @@ una convenzione da ricordare a chi chiama gli strumenti. Documentate qui
 perche' un vincolo capito e' piu' solido di un vincolo subito, e perche'
 un futuro intervento sul codice deve sapere perche' certe righe esistono.
 
+## Niente trattini lunghi, mai
+
+Ne' nel testo dei messaggi (oggetto, corpo, firma), ne' nei titoli o nel
+testo di questo repository (README, questo file, messaggi di commit).
+Solo trattino corto normale "-", mai il trattino lungo "em dash" o il
+trattino medio "en dash". Se serve una pausa o un inciso, si usa una
+virgola, due punti, o una frase separata, non un trattino lungo.
+
+Regola esplicita di Alberto (30.08.2026), dopo averla vista comparire nel
+titolo di una bozza di prova. Non e' ancora imposta a livello di codice
+(nessun controllo automatico la applica o la corregge), resta per ora una
+regola di scrittura da rispettare a mano quando si compone un messaggio o
+si modifica questo repository.
+
 ## html_body e' obbligatorio
 
 `send_email`, `create_draft` e `reply_email` richiedono sempre `html_body`.
@@ -65,45 +79,43 @@ Limiti noti di questa euristica, da tenere a mente se va estesa:
 
 ## Una sola riga vuota ovunque: tra i paragrafi, e tra il corpo e la firma
 
-Questa regola e' ora imposta in due punti distinti del codice, entrambi
-dentro `_wrap_html`, e vale sia tra un paragrafo e l'altro sia tra
-l'ultimo paragrafo e la firma:
+Regola generale: qualunque tag di blocco (`<p>`, `<div>`, `<ul>`, `<ol>`,
+`<table>`, i titoli, `<blockquote>`) porta gia' con se' il proprio margine
+verticale in Gmail. Ogni `<br>` messo subito prima o subito dopo un tag di
+blocco e' quindi ridondante e produce una riga vuota in piu' rispetto a
+quella che il tag stesso gia' fornisce. Questo principio unico e' applicato
+in due punti del codice, entrambi dentro `_wrap_html`/`_build_mime`.
 
-**Tra il corpo e la firma.** `SIGNATURES_TEXT` e `SIGNATURES_HTML`
-iniziano gia' con il proprio distacco iniziale prima della formula di
-chiusura ("Cordialement,\n\n..." in testo, "Cordialement,<br><br>..." in
-HTML). `_build_mime` unisce corpo e firma con un solo `"\n"` / `"<br>"` di
-separazione, non con `"\n\n"` / `"<br><br>"`: sommare un secondo
-separatore a quello gia' presente in testa alla firma produce una doppia
-riga vuota visibile prima di "Cordialement," (bug osservato il 26.08.2026
-e di nuovo il 30.08.2026, su una firma con logo intercalato che lo
-rendeva meno evidente a colpo d'occhio). Se in futuro cambia il formato
-di una firma in `SIGNATURES_TEXT`/`SIGNATURES_HTML`, va mantenuta la
-convenzione che la firma stessa porta il proprio spazio di apertura, non
-chi la usa.
+**Tra i paragrafi del corpo.** `_wrap_html` chiama
+`_normalize_paragraph_spacing` prima di `_inline_style` (aggiunto il
+30.08.2026). Questa funzione toglie ogni `<br>` (o sequenza di `<br>`) che
+si trova direttamente tra due tag di blocco di primo livello nel frammento
+HTML. Un `<br>` messo a mano tra un `</p>` e il `<p>` successivo si somma
+al margine gia' applicato da Gmail e produce una doppia riga vuota. La
+normalizzazione non tocca un `<br>` che sta tra testo semplice e un tag di
+blocco, ne' un `<br>` dentro testo non strutturato senza tag attorno.
 
-**Tra i paragrafi del corpo.** `_wrap_html` chiama `_normalize_paragraph_spacing`
-prima di `_inline_style` (aggiunto il 30.08.2026, stesso giorno in cui e'
-riemerso il bug sopra, sullo stesso principio). Questa funzione toglie
-ogni `<br>` (o sequenza di `<br>`) che si trova direttamente tra due tag
-di blocco di primo livello nel frammento HTML: `<p>`, `<div>`, `<ul>`,
-`<ol>`, `<table>`, i titoli `<h1>`-`<h6>`, `<blockquote>`. Gmail applica
-gia' un margine verticale di default tra blocchi di questo tipo; un
-`<br>` messo a mano tra un `</p>` e il `<p>` successivo si somma a quel
-margine e produce esattamente lo stesso problema di doppia riga vuota
-gia' visto tra corpo e firma, un livello piu' in basso.
+**Tra il corpo e la firma.** Qui la storia e' stata piu' lunga. Un primo
+fix (26.08.2026, poi rivisto il 30.08.2026) aveva ridotto la separazione
+da `"\n\n"`/`"<br><br>"` a un singolo `"\n"`/`"<br>"`, ragionando che le
+firme in `SIGNATURES_TEXT`/`SIGNATURES_HTML` iniziano gia' con il proprio
+distacco prima della formula di chiusura ("Cordialement,\n\n..."). Quel
+fix ha risolto il caso di due separatori sommati, ma non il problema di
+fondo: quando `html_body` finisce con un tag di blocco (`</p>`, `</div>`,
+...), quel tag porta gia' il proprio margine inferiore, quindi anche un
+solo `<br>` subito dopo produce comunque una riga vuota in piu'. Il bug e'
+ricomparso il 30.08.2026 (schermata di Alberto su una bozza di prova) con
+due righe vuote visibili prima di "Cordialement,", nonostante il primo fix
+fosse gia' attivo.
 
-La normalizzazione non tocca un `<br>` che sta tra testo semplice e un
-tag di blocco (il caso del distacco tra `html_body` e la firma HTML, che
-comincia con testo semplice prima del proprio `<br><br>` interno), ne' un
-`<br>` dentro testo non strutturato senza tag attorno: solo la
-spaziatura ridondante tra blocchi che Gmail spazia gia' da soli.
-
-Conseguenza pratica per chi scrive `html_body`: usare `<p>` per ogni
-paragrafo, con o senza `<br>` aggiuntivi tra un `<p>` e il successivo,
-il risultato e' lo stesso perche' il connettore normalizza comunque.
-Resta comunque piu' pulito scrivere `<p>...</p><p>...</p>` senza `<br>`
-di troppo, perche' e' quello che il codice produce alla fine.
+La correzione definitiva e' `_ends_with_block_tag`: verifica se l'ultimo
+nodo di primo livello di `html_body` (spazi bianchi a parte) e' un tag di
+blocco. `_build_mime` la usa per decidere il separatore verso la firma:
+stringa vuota se `html_body` finisce in un tag di blocco (il margine del
+tag e' gia' sufficiente), il `<br>` esplicito solo se `html_body` finisce
+in testo semplice senza tag di blocco (in quel caso serve ancora un ritorno
+a capo esplicito). Lo stesso principio delle due regole: il margine di un
+tag di blocco non va mai sommato a un `<br>` aggiuntivo nello stesso punto.
 
 ## Perche' queste regole sono nel codice e non solo qui
 
@@ -119,3 +131,12 @@ lo strumento se ne ricordi: si applica sempre, a ogni chiamata, da
 qualunque client MCP arrivi. E' la differenza tra chiedere a qualcuno di
 non dimenticarsi un passaggio e rendere quel passaggio impossibile da
 saltare.
+
+Nota su questa stessa sezione: anche il fix del 26.08.2026 sulla
+spaziatura corpo/firma sembrava corretto al momento, verificato con una
+simulazione locale, ma copriva solo una delle due cause possibili dello
+stesso sintomo visibile. La lezione pratica: un fix su un problema di
+resa visiva (spaziatura, doppioni) va verificato guardando l'email
+davvero renderizzata in Gmail, non solo il testo grezzo prodotto dal
+codice, perche' il rendering finale dipende anche dal comportamento di
+Gmail sui tag di blocco, che il solo output testuale non mostra.
