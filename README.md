@@ -8,6 +8,15 @@ Le caselle si identificano per indirizzo email in entrambi i connettori,
 cosi' puoi dire a Claude "rispondi dalla casella corsalis@..." e funziona
 allo stesso modo sui due sistemi.
 
+## Regole di composizione dei messaggi
+
+`html_body` e' obbligatorio su `send_email`, `create_draft` e `reply_email`,
+e nessuna firma o formula di chiusura va scritta a mano nel corpo: la firma
+ufficiale della casella viene aggiunta in automatico, e una chiusura scritta
+a mano viene comunque rilevata e tolta prima dell'invio. Questi non sono
+suggerimenti ma vincoli imposti dal codice. Dettagli e motivazione in
+[`CONVENTIONS.md`](./CONVENTIONS.md).
+
 ## Perche' un servizio separato invece di modificare navbuildz
 
 Per integrare l'invio direttamente nel codice di navbuildz servirebbe
@@ -91,6 +100,9 @@ Ogni strumento accetta l'indirizzo della casella mittente:
 - *"Invia una email da corsalis@... a fornitore@... con oggetto X"*
 - *"Rispondi a quell'ultima email nella casella almaval@..., anche a tutti"*
 - *"Crea una bozza da delitiae@... senza inviarla"*
+
+Vedi [`CONVENTIONS.md`](./CONVENTIONS.md) per le regole obbligatorie su
+`html_body` e sulla firma.
 
 ## Sicurezza
 
