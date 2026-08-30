@@ -529,6 +529,25 @@ _BLOCK_SPACING_TAGS = {
 }
 
 
+def _ends_with_block_tag(fragment: str) -> bool:
+    """
+    True se l'ultimo nodo di primo livello del frammento (spazi bianchi a
+    parte) e' uno dei tag in _BLOCK_SPACING_TAGS. Serve a decidere se un
+    <br> di separazione verso cio' che segue e' ridondante: un </p>
+    porta gia' il proprio margine inferiore, quindi un <br> subito dopo
+    produce comunque una riga vuota in piu', anche se dall'altra parte
+    del <br> non c'e' un altro tag di blocco ma testo semplice (il caso
+    della firma HTML, che comincia con "Cordialement," in chiaro).
+    """
+    soup = BeautifulSoup(fragment, "html.parser")
+    nodes = list(soup.contents)
+    while nodes and isinstance(nodes[-1], NavigableString) and not nodes[-1].strip():
+        nodes.pop()
+    if not nodes:
+        return False
+    return getattr(nodes[-1], "name", None) in _BLOCK_SPACING_TAGS
+
+
 def _normalize_paragraph_spacing(fragment: str) -> str:
     """
     Toglie ogni sequenza di <br> (con eventuali spazi bianchi attorno) che
@@ -630,7 +649,18 @@ def _build_mime(
     html_signature = _get_signature_html(account, signature_variant) if include_signature else ""
     inner_html = html_body
     if html_signature:
-        inner_html = f"{html_body}<br>{html_signature}"
+        # Se html_body finisce con un tag di blocco (</p>, </div>, ...),
+        # quel tag porta gia' il proprio margine inferiore: un <br> subito
+        # dopo si somma a quel margine e produce una riga vuota di troppo
+        # prima di "Cordialement," (osservato di nuovo il 30.08.2026, dopo
+        # il primo fix del 26.08, proprio perche' quel fix copriva solo il
+        # caso "<br><br>" -> "<br>", non il caso "un <br> comunque
+        # ridondante quando il corpo finisce gia' in un tag di blocco").
+        # Se invece html_body finisce in testo semplice (nessun tag di
+        # blocco), serve ancora un <br> esplicito per andare a capo prima
+        # della firma.
+        separator = "" if _ends_with_block_tag(html_body) else "<br>"
+        inner_html = f"{html_body}{separator}{html_signature}"
     wrapped_html = _wrap_html(inner_html, account)
 
     alt_part = MIMEMultipart("alternative")
