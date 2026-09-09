@@ -13,9 +13,12 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY gmail_send_mcp.py .
+COPY gmail_drafts_tools.py .
 COPY corsalis_logo.b64 .
 
 ENV PORT=3001
 EXPOSE 3001
 
-CMD ["python", "gmail_send_mcp.py"]
+# gmail_drafts_tools.py importa l'app da gmail_send_mcp.py e vi aggiunge
+# gli strumenti di gestione delle bozze, quindi l'avvio passa da li'.
+CMD ["python", "gmail_drafts_tools.py"]
