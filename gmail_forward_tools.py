@@ -2,12 +2,21 @@
 gmail_forward_tools.py
 
 Strumenti di inoltro: trasmettono un messaggio ricevuto a un altro
-destinatario CON I SUOI ALLEGATI ORIGINALI, byte per byte.
+destinatario CON I SUOI ALLEGATI ORIGINALI, byte per byte, e con la
+possibilita' di scegliere quali allegati inoltrare e quali no.
 
 Perche' serve un file a parte. send_email costruisce un messaggio nuovo e
 non sa allegare nulla: per mandare una fattura a un servizio contabile
 (DEXT, per esempio) il vero inoltro e' l'unica via utile, perche' il PDF
 allegato E' il documento, mentre il testo dell'email non lo e'.
+
+Perche' serve la selezione degli allegati. Molti messaggi automatici
+portano piu' documenti che dicono la stessa cosa in due forme: Stripe, per
+esempio, allega a ogni ricevuta sia Invoice-....pdf sia Receipt-....pdf.
+Mandarli entrambi a un servizio contabile significa creare due pezze per
+una sola spesa, cioe' un doppione da correggere a mano. I parametri
+attachment_include e attachment_exclude accettano motivi in stile glob
+(Invoice-*.pdf) e risolvono il caso senza scaricare nulla a mano.
 
 Ambito OAuth. Leggere il contenuto binario di un allegato rientra in
 gmail.readonly, inviare rientra in gmail.send: entrambi sono gia' negli
@@ -23,11 +32,14 @@ della casella si applica soltanto al commento di accompagnamento e alla
 firma.
 
 Limite di dimensione. Gmail rifiuta gli invii oltre i 25 MB. Il tool si
-ferma prima, a 20 MB di allegati, con un errore esplicito invece di un
-500 opaco.
+ferma prima, a 20 MB di allegati EFFETTIVAMENTE inoltrati, con un errore
+esplicito invece di un 500 opaco. Il conteggio avviene dopo il filtro,
+quindi escludere un allegato pesante e' anche il modo di far passare un
+messaggio altrimenti troppo grande.
 """
 
 import base64
+import fnmatch
 import html as html_lib
 import re
 from email import encoders
@@ -88,12 +100,13 @@ def _raccogli_allegati(service, message_id: str, payload: dict) -> list[dict]:
                     for h in parte.get("headers", []) or []
                 }
                 disposizione = intestazioni.get("content-disposition", "")
+                content_id = (intestazioni.get("content-id") or "").strip("<>")
                 allegati.append({
                     "filename": nome,
                     "mime_type": parte.get("mimeType") or "application/octet-stream",
                     "bytes": _decodifica(dato),
-                    "content_id": (intestazioni.get("content-id") or "").strip("<>"),
-                    "inline": "inline" in disposizione.lower(),
+                    "content_id": content_id,
+                    "inline": "inline" in disposizione.lower() or bool(content_id),
                 })
             return
 
@@ -102,6 +115,59 @@ def _raccogli_allegati(service, message_id: str, payload: dict) -> list[dict]:
 
     _percorri(payload)
     return allegati
+
+
+def _corrisponde(nome: str, motivi: list[str]) -> bool:
+    """
+    Confronto in stile glob, indifferente a maiuscole e minuscole, su piu'
+    motivi: basta che uno corrisponda. Un motivo senza carattere jolly
+    vale come nome esatto, quindi 'Invoice-9BF0758D-5807021.pdf' funziona
+    tanto quanto 'Invoice-*.pdf'.
+    """
+    nome_confronto = nome.lower()
+    return any(fnmatch.fnmatch(nome_confronto, motivo.lower()) for motivo in motivi)
+
+
+def _filtra_allegati(
+    allegati: list[dict],
+    include: Optional[list[str]],
+    exclude: Optional[list[str]],
+    keep_inline_images: bool,
+) -> tuple[list[dict], list[str]]:
+    """
+    Applica i motivi di selezione e restituisce (tenuti, nomi_scartati).
+
+    Regole, nell'ordine:
+      1. se include e' fornito, resta solo cio' che vi corrisponde;
+      2. exclude toglie comunque cio' che vi corrisponde, anche se era
+         stato incluso al punto 1;
+      3. le immagini in linea (quelle con un Content-ID, richiamate dal
+         corpo HTML con cid:) sfuggono al solo punto 1, se
+         keep_inline_images e' attivo: filtrarle via lascerebbe il corpo
+         inoltrato pieno di immagini rotte, il che non e' mai cio' che si
+         voleva chiedendo 'mandami solo le fatture'. Restano invece
+         soggette a exclude, che e' un ordine esplicito.
+    """
+    tenuti: list[dict] = []
+    scartati: list[str] = []
+
+    for allegato in allegati:
+        nome = allegato["filename"]
+
+        if exclude and _corrisponde(nome, exclude):
+            scartati.append(nome)
+            continue
+
+        if include and not _corrisponde(nome, include):
+            if keep_inline_images and allegato["inline"] and allegato["content_id"]:
+                tenuti.append(allegato)
+                continue
+            scartati.append(nome)
+            continue
+
+        tenuti.append(allegato)
+
+    return tenuti, scartati
 
 
 def _citazione_testo(intestazioni: dict) -> str:
@@ -115,6 +181,14 @@ def _citazione_testo(intestazioni: dict) -> str:
     if intestazioni.get("Cc"):
         righe.append(f"Cc : {intestazioni['Cc']}")
     return "\n".join(righe) + "\n\n"
+
+
+def _stile_inline(stile: dict) -> str:
+    return (
+        f"font-family:{stile['font_family']};"
+        f"font-size:{stile['font_size']};"
+        f"color:{stile['color']};"
+    )
 
 
 def _citazione_html(intestazioni: dict, stile: dict) -> str:
@@ -134,14 +208,6 @@ def _citazione_html(intestazioni: dict, stile: dict) -> str:
         f'<div style="{_stile_inline(stile)}">'
         + "<br>".join(righe)
         + "</div><br>"
-    )
-
-
-def _stile_inline(stile: dict) -> str:
-    return (
-        f"font-family:{stile['font_family']};"
-        f"font-size:{stile['font_size']};"
-        f"color:{stile['color']};"
     )
 
 
@@ -240,6 +306,9 @@ def _inoltra(
     comment: str,
     comment_html: str,
     include_attachments: bool,
+    attachment_include: Optional[list[str]],
+    attachment_exclude: Optional[list[str]],
+    keep_inline_images: bool,
     include_original_body: bool,
     include_signature: bool,
     signature_variant: Optional[str],
@@ -251,13 +320,28 @@ def _inoltra(
 
     testo_originale, html_originale, _ = _extract_body_and_attachments(originale["payload"])
 
-    allegati = _raccogli_allegati(service, message_id, originale["payload"]) if include_attachments else []
+    allegati: list[dict] = []
+    scartati: list[str] = []
+    if include_attachments:
+        tutti = _raccogli_allegati(service, message_id, originale["payload"])
+        allegati, scartati = _filtra_allegati(
+            tutti, attachment_include, attachment_exclude, keep_inline_images
+        )
+        if attachment_include and not any(not a["inline"] for a in allegati):
+            disponibili = ", ".join(a["filename"] for a in tutti) or "nessun allegato"
+            raise ValueError(
+                f"Nessun allegato corrisponde a {attachment_include} nel messaggio "
+                f"{message_id}. Allegati presenti : {disponibili}. "
+                "Il messaggio non e' stato inoltrato, per non mandare una pezza vuota."
+            )
+
     peso = sum(len(a["bytes"]) for a in allegati)
     if peso > LIMITE_ALLEGATI_BYTE:
         raise ValueError(
             f"Allegati troppo pesanti per un invio Gmail : {peso / 1024 / 1024:.1f} MB "
             f"(limite prudenziale {LIMITE_ALLEGATI_BYTE / 1024 / 1024:.0f} MB). "
-            "Inoltra il messaggio a mano, oppure riprova con include_attachments=False."
+            "Restringi la selezione con attachment_include o attachment_exclude, "
+            "oppure inoltra il messaggio a mano."
         )
 
     oggetto = subject
@@ -310,6 +394,7 @@ def _inoltra(
         "oggetto": oggetto,
         "destinatario": to,
         "allegati_inoltrati": [a["filename"] for a in allegati],
+        "allegati_scartati": scartati,
         "peso_allegati_kb": round(peso / 1024, 1),
         "stato": "inoltrata",
     }
@@ -326,15 +411,19 @@ def forward_email(
     bcc: Optional[str] = None,
     subject: Optional[str] = None,
     include_attachments: bool = True,
+    attachment_include: Optional[list[str]] = None,
+    attachment_exclude: Optional[list[str]] = None,
+    keep_inline_images: bool = True,
     include_original_body: bool = True,
     include_signature: bool = True,
     signature_variant: Optional[str] = None,
 ) -> dict:
     """
     Inoltra un messaggio ricevuto a un altro destinatario, con i suoi
-    allegati originali intatti. E' il tool da usare quando cio' che conta
-    e' il file allegato (fattura, ricevuta, contratto) e non il testo:
-    send_email costruirebbe un messaggio nuovo, senza allegati.
+    allegati originali intatti, eventualmente solo alcuni. E' il tool da
+    usare quando cio' che conta e' il file allegato (fattura, ricevuta,
+    contratto) e non il testo: send_email costruirebbe un messaggio nuovo,
+    senza allegati.
 
     account: la casella che possiede il messaggio e da cui parte l'inoltro
     message_id: l'id del messaggio da inoltrare, ottenuto da list_emails
@@ -346,8 +435,22 @@ def forward_email(
         applicato dal connettore.
     subject: oggetto, facoltativo. Per difetto l'oggetto originale
         preceduto da "Fwd: ", salvo che lo sia gia'.
-    include_attachments: attivo per difetto. A False il messaggio parte
-        senza allegati, utile solo se superano il limite di invio.
+
+    Selezione degli allegati (i nomi si leggono con get_email):
+    attachment_include: elenco di motivi in stile glob, es.
+        ["Invoice-*.pdf"]. Se fornito, parte SOLO cio' che vi corrisponde.
+        Un nome scritto per intero vale come motivo esatto. Se nessun
+        allegato corrisponde, il messaggio non parte e il tool lo dice,
+        invece di mandare una pezza vuota.
+    attachment_exclude: elenco di motivi da escludere, es.
+        ["Receipt-*.pdf"]. Ha la precedenza su attachment_include.
+    keep_inline_images: attivo per difetto. Conserva le immagini
+        richiamate dal corpo HTML (loghi, firme grafiche) anche quando
+        attachment_include escluderebbe tutto il resto, per non inoltrare
+        un messaggio pieno di immagini rotte. Restano comunque soggette a
+        attachment_exclude.
+    include_attachments: a False il messaggio parte senza alcun allegato.
+
     include_original_body: attivo per difetto. A False parte solo il
         commento con gli allegati, senza il corpo del messaggio originale.
     include_signature: attivo per difetto. Conviene metterlo a False
@@ -370,6 +473,9 @@ def forward_email(
         comment=comment,
         comment_html=comment_html,
         include_attachments=include_attachments,
+        attachment_include=attachment_include,
+        attachment_exclude=attachment_exclude,
+        keep_inline_images=keep_inline_images,
         include_original_body=include_original_body,
         include_signature=include_signature,
         signature_variant=signature_variant,
@@ -386,6 +492,9 @@ def forward_emails(
     cc: Optional[str] = None,
     bcc: Optional[str] = None,
     include_attachments: bool = True,
+    attachment_include: Optional[list[str]] = None,
+    attachment_exclude: Optional[list[str]] = None,
+    keep_inline_images: bool = True,
     include_original_body: bool = True,
     include_signature: bool = True,
     signature_variant: Optional[str] = None,
@@ -400,9 +509,14 @@ def forward_emails(
     account: la casella che possiede i messaggi
     message_ids: elenco degli id, ottenuti da list_emails
     to, cc, bcc: destinatari, uguali per tutti i messaggi del lotto
-    comment, comment_html, include_attachments, include_original_body,
+
+    attachment_include, attachment_exclude, keep_inline_images,
+    include_attachments, comment, comment_html, include_original_body,
     include_signature, signature_variant: come in forward_email, applicati
-        a ogni messaggio del lotto.
+        a ogni messaggio del lotto. Un lotto omogeneo (per esempio dieci
+        ricevute Stripe) si tratta bene cosi': attachment_include
+        ["Invoice-*.pdf"] manda la fattura di ciascuna e lascia da parte
+        la ricevuta, che duplicherebbe la stessa spesa in contabilita'.
 
     Un errore su un messaggio non ferma gli altri: viene riportato nella
     lista 'falliti', con il suo motivo, e il lotto prosegue.
@@ -424,6 +538,9 @@ def forward_emails(
                 comment=comment,
                 comment_html=comment_html,
                 include_attachments=include_attachments,
+                attachment_include=attachment_include,
+                attachment_exclude=attachment_exclude,
+                keep_inline_images=keep_inline_images,
                 include_original_body=include_original_body,
                 include_signature=include_signature,
                 signature_variant=signature_variant,
