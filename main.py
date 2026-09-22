@@ -26,6 +26,7 @@ import os
 from gmail_send_mcp import app  # crea l'app FastAPI e l'istanza FastMCP
 import gmail_drafts_tools  # noqa: F401 - registra gli strumenti delle bozze
 import gmail_forward_tools  # noqa: F401 - registra gli strumenti di inoltro
+import gmail_attach_tools  # noqa: F401 - registra gli strumenti con allegati
 
 if __name__ == "__main__":
     import uvicorn
