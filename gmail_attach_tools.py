@@ -13,12 +13,20 @@ non si tocca nient'altro. E' esattamente cio' che fa questo modulo.
 
 Cosa cambia rispetto a send_email e create_draft
 ------------------------------------------------
-Solo la struttura MIME. Tutte le regole di composizione restano quelle
-del pacchetto condiviso gmail_message_rules (html_body obbligatorio,
-niente trattini lunghi, niente chiusura scritta a mano duplicata, una
-sola riga vuota tra i paragrafi e prima della firma), e la firma
-ufficiale della casella, logo Corsalis in linea compreso, resta quella
-prodotta da gmail_send_mcp. Nulla di tutto cio' e' riscritto qui.
+Due cose, e nient'altro.
+
+1. La struttura MIME, che diventa multipart/mixed quando c'e' almeno un
+   allegato.
+2. La copia nascosta sulle bozze. create_draft non accetta bcc: una
+   bozza creata da un motore perderebbe in silenzio la copia alla
+   casella contabile, che per le fatture Corsalis non e' un dettaglio.
+
+Tutte le regole di composizione restano quelle del pacchetto condiviso
+gmail_message_rules (html_body obbligatorio, niente trattini lunghi,
+niente chiusura scritta a mano duplicata, una sola riga vuota tra i
+paragrafi e prima della firma), e la firma ufficiale della casella, logo
+Corsalis in linea compreso, resta quella prodotta da gmail_send_mcp.
+Nulla di tutto cio' e' riscritto qui.
 
 La struttura del messaggio diventa:
 
@@ -102,12 +110,12 @@ _MIME_PAR_EXTENSION = {
 }
 
 
-def _type_mime(nom_fichier: str, declare: Optional[str]) -> tuple[str, str]:
+def _type_mime(nome_file: str, dichiarato: Optional[str]) -> tuple[str, str]:
     """Il tipo MIME dichiarato dal chiamante, o dedotto dall'estensione."""
-    if declare and "/" in declare:
-        principale, _, secondario = declare.partition("/")
+    if dichiarato and "/" in dichiarato:
+        principale, _, secondario = dichiarato.partition("/")
         return principale.strip() or "application", secondario.strip() or "octet-stream"
-    _, estensione = os.path.splitext(nom_fichier.lower())
+    _, estensione = os.path.splitext(nome_file.lower())
     return _MIME_PAR_EXTENSION.get(estensione, ("application", "octet-stream"))
 
 
@@ -130,7 +138,7 @@ def _parti_allegate(attachments) -> list[MIMEBase]:
         attachments = [attachments]
 
     parti: list[MIMEBase] = []
-    total = 0
+    totale = 0
 
     for rango, voce in enumerate(attachments, start=1):
         if not isinstance(voce, dict):
@@ -138,44 +146,44 @@ def _parti_allegate(attachments) -> list[MIMEBase]:
                 f"Allegato {rango}: serve un oggetto con 'filename' e 'content_base64'."
             )
 
-        nom = str(voce.get("filename") or "").strip()
-        if not nom:
+        nome = str(voce.get("filename") or "").strip()
+        if not nome:
             raise ValueError(f"Allegato {rango}: 'filename' mancante.")
 
-        brut = voce.get("content_base64") or voce.get("content") or ""
-        brut = "".join(str(brut).split())
-        if not brut:
-            raise ValueError(f"Allegato '{nom}': 'content_base64' mancante o vuoto.")
+        grezzo = voce.get("content_base64") or voce.get("content") or ""
+        grezzo = "".join(str(grezzo).split())
+        if not grezzo:
+            raise ValueError(f"Allegato '{nome}': 'content_base64' mancante o vuoto.")
 
         try:
-            donnees = base64.b64decode(brut, validate=True)
+            dati = base64.b64decode(grezzo, validate=True)
         except (binascii.Error, ValueError) as exc:
             raise ValueError(
-                f"Allegato '{nom}': contenuto base64 illeggibile ({exc})."
+                f"Allegato '{nome}': contenuto base64 illeggibile ({exc})."
             ) from exc
 
-        if not donnees:
-            raise ValueError(f"Allegato '{nom}': contenuto vuoto dopo la decodifica.")
+        if not dati:
+            raise ValueError(f"Allegato '{nome}': contenuto vuoto dopo la decodifica.")
 
-        total += len(donnees)
-        if total > MAX_TOTAL_BYTES:
+        totale += len(dati)
+        if totale > MAX_TOTAL_BYTES:
             raise ValueError(
                 "Allegati troppo pesanti: {:.1f} Mo, il tetto e' {:.0f} Mo.".format(
-                    total / 1048576, MAX_TOTAL_BYTES / 1048576
+                    totale / 1048576, MAX_TOTAL_BYTES / 1048576
                 )
             )
 
-        principale, secondario = _type_mime(nom, voce.get("mime_type"))
-        partie = MIMEBase(principale, secondario)
-        partie.set_payload(donnees)
-        encoders.encode_base64(partie)
-        partie.add_header("Content-Disposition", "attachment", filename=nom)
-        parti.append(partie)
+        principale, secondario = _type_mime(nome, voce.get("mime_type"))
+        parte = MIMEBase(principale, secondario)
+        parte.set_payload(dati)
+        encoders.encode_base64(parte)
+        parte.add_header("Content-Disposition", "attachment", filename=nome)
+        parti.append(parte)
 
     return parti
 
 
-def _construire_mime(
+def _costruisci_mime(
     to: str,
     subject: str,
     body: str,
@@ -189,7 +197,7 @@ def _construire_mime(
     signature_variant: Optional[str] = None,
     include_signature: bool = True,
 ) -> str:
-    """Il messaggio complet, en base64 url-safe, prêt pour l'API Gmail."""
+    """Il messaggio completo, in base64 url-safe, pronto per l'API Gmail."""
     signature_text = (
         _get_signature_text(account, signature_variant) if include_signature else ""
     )
@@ -198,7 +206,7 @@ def _construire_mime(
     )
 
     try:
-        construit = build_message(
+        costruito = build_message(
             subject=subject,
             body=body,
             html_body=html_body,
@@ -209,41 +217,43 @@ def _construire_mime(
     except HtmlBodyRequiredError as exc:
         raise ValueError(str(exc))
 
-    alternative = MIMEMultipart("alternative")
-    alternative.attach(MIMEText(construit["text_body"], "plain"))
-    alternative.attach(MIMEText(construit["html_body"], "html"))
+    alternativa = MIMEMultipart("alternative")
+    alternativa.attach(MIMEText(costruito["text_body"], "plain"))
+    alternativa.attach(MIMEText(costruito["html_body"], "html"))
 
     logo_cid = _ACCOUNT_LOGO_CID.get(account) if include_signature else None
     if logo_cid and _INLINE_LOGOS.get(logo_cid):
-        corps = MIMEMultipart("related")
-        corps.attach(alternative)
-        image = MIMEImage(base64.b64decode(_INLINE_LOGOS[logo_cid]), _subtype="png")
-        image.add_header("Content-ID", f"<{logo_cid}>")
-        image.add_header("Content-Disposition", "inline", filename=f"{logo_cid}.png")
-        corps.attach(image)
+        corpo = MIMEMultipart("related")
+        corpo.attach(alternativa)
+        immagine = MIMEImage(base64.b64decode(_INLINE_LOGOS[logo_cid]), _subtype="png")
+        immagine.add_header("Content-ID", f"<{logo_cid}>")
+        immagine.add_header(
+            "Content-Disposition", "inline", filename=f"{logo_cid}.png"
+        )
+        corpo.attach(immagine)
     else:
-        corps = alternative
+        corpo = alternativa
 
     parti = _parti_allegate(attachments)
     if parti:
-        message = MIMEMultipart("mixed")
-        message.attach(corps)
-        for partie in parti:
-            message.attach(partie)
+        messaggio = MIMEMultipart("mixed")
+        messaggio.attach(corpo)
+        for parte in parti:
+            messaggio.attach(parte)
     else:
-        message = corps
+        messaggio = corpo
 
-    message["to"] = to
-    message["subject"] = construit["subject"]
+    messaggio["to"] = to
+    messaggio["subject"] = costruito["subject"]
     if cc:
-        message["cc"] = cc
+        messaggio["cc"] = cc
     if bcc:
-        message["bcc"] = bcc
+        messaggio["bcc"] = bcc
     if in_reply_to:
-        message["In-Reply-To"] = in_reply_to
-        message["References"] = references or in_reply_to
+        messaggio["In-Reply-To"] = in_reply_to
+        messaggio["References"] = references or in_reply_to
 
-    return base64.urlsafe_b64encode(message.as_bytes()).decode()
+    return base64.urlsafe_b64encode(messaggio.as_bytes()).decode()
 
 
 @mcp.tool()
@@ -278,7 +288,7 @@ def send_email_with_attachments(
         non usare trattini lunghi.
     """
     service = _gmail_service(account)
-    raw = _construire_mime(
+    raw = _costruisci_mime(
         to=to,
         subject=subject,
         body=body,
@@ -307,6 +317,7 @@ def create_draft_with_attachments(
     subject: Optional[str] = None,
     to: Optional[str] = None,
     cc: Optional[str] = None,
+    bcc: Optional[str] = None,
     signature_variant: Optional[str] = None,
     reply_to_message_id: Optional[str] = None,
     reply_all: bool = True,
@@ -322,6 +333,8 @@ def create_draft_with_attachments(
         mime_type e' facoltativo, viene dedotto dall'estensione. Il tetto
         complessivo e' di 20 Mo. Lista vuota o assente: la bozza e'
         identica a quella di create_draft.
+    bcc: copia nascosta, che create_draft non prevede. Serve alle bozze
+        create da un motore, per esempio la copia alla casella contabile.
     reply_to_message_id: se fornito, la bozza resta nel thread di quel
         messaggio; destinatario, oggetto e copie vengono dedotti
         dall'originale, salvo quelli passati esplicitamente.
@@ -339,22 +352,22 @@ def create_draft_with_attachments(
     thread_id = None
 
     if reply_to_message_id:
-        contexte = _reply_context(
+        contesto = _reply_context(
             service, account, reply_to_message_id, reply_all=reply_all
         )
-        to = to or contexte["to"]
-        subject = subject or contexte["subject"]
-        cc = cc or contexte["cc"]
-        in_reply_to = contexte["in_reply_to"]
-        references = contexte["references"]
-        thread_id = contexte["thread_id"]
+        to = to or contesto["to"]
+        subject = subject or contesto["subject"]
+        cc = cc or contesto["cc"]
+        in_reply_to = contesto["in_reply_to"]
+        references = contesto["references"]
+        thread_id = contesto["thread_id"]
 
     if not to:
         raise ValueError(
             "Serve un destinatario: passa 'to' oppure 'reply_to_message_id'."
         )
 
-    raw = _construire_mime(
+    raw = _costruisci_mime(
         to=to,
         subject=subject or "",
         body=body,
@@ -362,19 +375,20 @@ def create_draft_with_attachments(
         account=account,
         attachments=attachments,
         cc=cc,
+        bcc=bcc,
         in_reply_to=in_reply_to,
         references=references,
         signature_variant=signature_variant,
     )
 
-    corps_message = {"raw": raw}
+    corpo_messaggio = {"raw": raw}
     if thread_id:
-        corps_message["threadId"] = thread_id
+        corpo_messaggio["threadId"] = thread_id
 
     bozza = (
         service.users()
         .drafts()
-        .create(userId="me", body={"message": corps_message})
+        .create(userId="me", body={"message": corpo_messaggio})
         .execute()
     )
     return {
@@ -382,6 +396,7 @@ def create_draft_with_attachments(
         "threadId": thread_id,
         "destinatario": to,
         "copia": cc,
+        "copia_nascosta": bcc,
         "allegati": len(attachments or []),
         "stato": "bozza creata nel thread" if thread_id else "bozza creata",
     }
