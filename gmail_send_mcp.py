@@ -31,6 +31,13 @@ specifiche di queste caselle (incluso il logo Corsalis inline), le
 varianti endolift, e i tool MCP esposti. Vedi CONVENTIONS.md in
 gmail-message-rules per il perche' di ciascuna regola.
 
+Intestazioni: To, Subject, Cc e Bcc sono scritte con la maiuscola
+canonica. In minuscolo sarebbero valide per la RFC 5322 e Gmail le
+consegnerebbe senza problemi, ma l'API Gmail restituisce il nome
+dell'intestazione com'e' stato scritto, e list_emails e list_drafts
+mostrerebbero allora oggetto e destinatario vuoti. Stessa scelta in
+gmail_attach_tools.py: i due moduli restano allineati.
+
 Pagina di gestione account su /setup, protetta da ADMIN_PASSWORD via HTTP
 Basic Auth. Endpoint MCP su /mcp.
 
@@ -435,12 +442,16 @@ def _build_mime(
     else:
         message = alt_part
 
-    message["to"] = to
-    message["subject"] = built["subject"]
+    # Maiuscola canonica: l'API Gmail restituisce il nome dell'intestazione
+    # com'e' stato scritto, e un "to" minuscolo esce come destinatario
+    # vuoto in list_emails e list_drafts. Stessa scelta in
+    # gmail_attach_tools.py.
+    message["To"] = to
+    message["Subject"] = built["subject"]
     if cc:
-        message["cc"] = cc
+        message["Cc"] = cc
     if bcc:
-        message["bcc"] = bcc
+        message["Bcc"] = bcc
     if in_reply_to:
         message["In-Reply-To"] = in_reply_to
         message["References"] = references or in_reply_to
