@@ -13,13 +13,19 @@ non si tocca nient'altro. E' esattamente cio' che fa questo modulo.
 
 Cosa cambia rispetto a send_email e create_draft
 ------------------------------------------------
-Due cose, e nient'altro.
+Tre cose, e nient'altro.
 
 1. La struttura MIME, che diventa multipart/mixed quando c'e' almeno un
    allegato.
 2. La copia nascosta sulle bozze. create_draft non accetta bcc: una
    bozza creata da un motore perderebbe in silenzio la copia alla
    casella contabile, che per le fatture Corsalis non e' un dettaglio.
+3. Le intestazioni To, Subject, Cc e Bcc scritte con la maiuscola
+   canonica. In minuscolo sono valide per la RFC 5322 e Gmail le
+   consegna senza problemi, ma l'API Gmail restituisce il nome
+   dell'intestazione com'e' stato scritto: list_emails e list_drafts
+   mostrano allora oggetto e destinatario vuoti, proprio quando servono
+   a controllare una bozza prodotta da un motore.
 
 Tutte le regole di composizione restano quelle del pacchetto condiviso
 gmail_message_rules (html_body obbligatorio, niente trattini lunghi,
@@ -243,12 +249,15 @@ def _costruisci_mime(
     else:
         messaggio = corpo
 
-    messaggio["to"] = to
-    messaggio["subject"] = costruito["subject"]
+    # Maiuscola canonica: l'API Gmail restituisce il nome dell'intestazione
+    # com'e' stato scritto, e un "to" minuscolo esce come destinatario
+    # vuoto in list_emails e list_drafts.
+    messaggio["To"] = to
+    messaggio["Subject"] = costruito["subject"]
     if cc:
-        messaggio["cc"] = cc
+        messaggio["Cc"] = cc
     if bcc:
-        messaggio["bcc"] = bcc
+        messaggio["Bcc"] = bcc
     if in_reply_to:
         messaggio["In-Reply-To"] = in_reply_to
         messaggio["References"] = references or in_reply_to
