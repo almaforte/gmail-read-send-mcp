@@ -15,5 +15,5 @@ beautifulsoup4
 # ripescare davvero l'ultima versione, cambiare la data qui sotto: la
 # riga cambia, la cache si invalida, pip riscarica.
 #
-# Ultimo ripescaggio forzato: 2026-09-23
+# Ultimo ripescaggio forzato: 2026-09-23b (grigio chiaro del disclaimer)
 git+https://github.com/almaforte/gmail-message-rules.git@main
