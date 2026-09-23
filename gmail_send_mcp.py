@@ -11,6 +11,16 @@ mittente, se configurata. La casella endolift@corsalis.ch ha tre varianti
 di firma selezionabili con il parametro signature_variant ("logistics",
 "accounting", "medical", che e' il valore predefinito).
 
+Da dove viene una firma. Di norma e' scritta qui sotto, nei due dizionari
+SIGNATURES_TEXT e SIGNATURES_HTML. Le caselle elencate in
+signatures_gestion.GMAIL_SIGNATURE_ACCOUNTS fanno eccezione: la loro
+firma viene letta dalle impostazioni Gmail della casella a ogni invio,
+cosi' chi la modifica nella casella vede il cambiamento partire da solo,
+senza un commit. Se quella lettura non riesce, per esempio perche' il
+token non porta ancora la portata gmail.settings.basic, si ripiega in
+silenzio sulla firma scritta qui: nessun messaggio parte mai nudo per un
+problema di rete o di permessi.
+
 Formattazione HTML: send_email, create_draft e reply_email richiedono un
 parametro html_body. Il messaggio viene costruito in multipart/alternative:
 la versione testuale (body + firma testuale) resta come fallback, la
@@ -19,8 +29,9 @@ e' obbligatorio: non e' piu' possibile inviare o mettere in bozza un
 messaggio in solo testo semplice.
 
 Tutte le regole di formattazione (html_body obbligatorio, niente trattini
-lunghi, niente firma scritta a mano duplicata, una sola riga vuota tra
-paragrafi e prima della firma) NON sono piu' implementate qui: vivono nel
+lunghi, niente firma scritta a mano duplicata, grassetto riservato ai
+titoli e alle poche parole determinanti, una sola riga vuota tra
+paragrafi e prima della firma) NON sono implementate qui: vivono nel
 pacchetto condiviso gmail_message_rules (vedi
 https://github.com/almaforte/gmail-message-rules), installato da questo
 requirements.txt sempre dall'ultima versione di main, cosi' che un
@@ -87,8 +98,15 @@ from gmail_message_rules import build_message, HtmlBodyRequiredError
 
 # La firma di gestion@almaval.ch e' una tabella completa, con logo,
 # pittogrammi e social: vive in un file suo per non rendere illeggibile la
-# parte che conta qui sotto, cioe' quale casella ha quale firma.
-from signatures_gestion import GESTION_SIGNATURE_HTML, GESTION_SIGNATURE_TEXT
+# parte che conta qui sotto, cioe' quale casella ha quale firma. Lo stesso
+# modulo porta il meccanismo che permette a una casella di tenere la
+# propria firma nelle impostazioni Gmail invece che nel codice.
+from signatures_gestion import (
+    GESTION_SIGNATURE_HTML,
+    GESTION_SIGNATURE_TEXT,
+    GMAIL_SIGNATURE_ACCOUNTS,
+    firma_da_gmail,
+)
 
 # ---------------------------------------------------------------------------
 # Configurazione
@@ -102,10 +120,15 @@ FERNET_KEY = os.environ["FERNET_KEY"]
 
 REDIRECT_URI = f"{SERVER_URL}/oauth/callback"
 
+# gmail.settings.basic serve solo a leggere la firma configurata su una
+# casella (vedi signatures_gestion). I token gia' esistenti NON la
+# portano: restano validi per l'invio, ma la lettura della firma fallisce
+# finche' la casella non viene ricollegata da /setup.
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/gmail.compose",
     "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.settings.basic",
     "openid",
     "https://www.googleapis.com/auth/userinfo.email",
 ]
@@ -178,6 +201,9 @@ def _gmail_service(email: str):
 # SENZA firma, in silenzio. La pagina /setup elenca per questo le caselle
 # che una firma ce l'hanno: e' cosi' che il caso di gestion@almaval.ch,
 # rimasto nudo per settimane, e' passato inosservato fino al 23.09.2026.
+#
+# Le caselle in GMAIL_SIGNATURE_ACCOUNTS prendono invece la firma dalle
+# proprie impostazioni Gmail, e quella scritta qui resta come ripiego.
 # ---------------------------------------------------------------------------
 
 _CORSALIS_DISCLAIMER_TEXT = (
@@ -351,12 +377,18 @@ def _endolift_signature_html(variant: str) -> str:
 def _get_signature_text(account: str, signature_variant: str = None) -> str:
     if account == "endolift@corsalis.ch":
         return _endolift_signature_text(signature_variant or "medical")
+    da_gmail = firma_da_gmail(_gmail_service, account)
+    if da_gmail:
+        return da_gmail[0]
     return SIGNATURES_TEXT.get(account, "")
 
 
 def _get_signature_html(account: str, signature_variant: str = None) -> str:
     if account == "endolift@corsalis.ch":
         return _endolift_signature_html(signature_variant or "medical")
+    da_gmail = firma_da_gmail(_gmail_service, account)
+    if da_gmail:
+        return da_gmail[1]
     return SIGNATURES_HTML.get(account, "")
 
 
@@ -926,19 +958,23 @@ def setup_page(_: None = Depends(_check_admin)):
         logo_stato = f"presente ({len(_CORSALIS_LOGO_B64)} caratteri)"
     else:
         logo_stato = "assente (né variabile CORSALIS_LOGO_B64 né file corsalis_logo.b64)"
-    firme = "".join(
-        f"<li>{email}</li>"
-        for email in sorted(set(SIGNATURES_HTML) | {"endolift@corsalis.ch"})
-    )
+    nel_codice = sorted((set(SIGNATURES_HTML) | {"endolift@corsalis.ch"}) - GMAIL_SIGNATURE_ACCOUNTS)
+    firme_codice = "".join(f"<li>{email}</li>" for email in nel_codice)
+    firme_gmail = "".join(f"<li>{email}</li>" for email in sorted(GMAIL_SIGNATURE_ACCOUNTS))
     return f"""
     <html><body style="font-family: sans-serif; max-width: 640px; margin: 40px auto;">
     <h2>Gmail Send MCP &middot; caselle collegate</h2>
     <ul>{accounts}</ul>
     <p><a href="/connect">+ Collega una nuova casella</a></p>
     <hr>
-    <p>Caselle con firma ufficiale configurata :</p>
-    <ul>{firme}</ul>
-    <p>Una casella collegata ma assente da questa lista invia messaggi senza firma.</p>
+    <p>Firma scritta nel codice del connettore :</p>
+    <ul>{firme_codice}</ul>
+    <p>Firma letta dalle impostazioni Gmail della casella, a ogni invio :</p>
+    <ul>{firme_gmail}</ul>
+    <p>Una casella collegata ma assente da entrambe le liste invia messaggi
+    senza firma. Una casella della seconda lista che non sia stata
+    ricollegata dopo l'aggiunta della portata gmail.settings.basic ripiega
+    in silenzio sulla firma scritta nel codice.</p>
     <hr>
     <p>Logo Corsalis : {logo_stato}</p>
     <hr>
