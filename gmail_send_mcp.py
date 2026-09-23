@@ -85,6 +85,11 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from gmail_message_rules import build_message, HtmlBodyRequiredError
 
+# La firma di gestion@almaval.ch e' una tabella completa, con logo,
+# pittogrammi e social: vive in un file suo per non rendere illeggibile la
+# parte che conta qui sotto, cioe' quale casella ha quale firma.
+from signatures_gestion import GESTION_SIGNATURE_HTML, GESTION_SIGNATURE_TEXT
+
 # ---------------------------------------------------------------------------
 # Configurazione
 # ---------------------------------------------------------------------------
@@ -168,6 +173,11 @@ def _gmail_service(email: str):
 # Le due versioni vanno tenute sincronizzate a mano quando cambia una firma.
 # Le firme HTML non contengono piu' indicazioni di carattere, dimensione o
 # colore: lo stile arriva da STYLE_DEFAULT, unica fonte di verita'.
+#
+# Una casella collegata ma assente da questi due dizionari invia messaggi
+# SENZA firma, in silenzio. La pagina /setup elenca per questo le caselle
+# che una firma ce l'hanno: e' cosi' che il caso di gestion@almaval.ch,
+# rimasto nudo per settimane, e' passato inosservato fino al 23.09.2026.
 # ---------------------------------------------------------------------------
 
 _CORSALIS_DISCLAIMER_TEXT = (
@@ -194,6 +204,7 @@ SIGNATURES_TEXT = {
         "Castel de Bois Genoud, 1023 Crissier\n"
         "almaval.ch"
     ),
+    "gestion@almaval.ch": GESTION_SIGNATURE_TEXT,
     "forte.albertomaria@gmail.com": (
         "Cordialement,\n\n"
         "Dr Alberto M. Forte\n"
@@ -265,6 +276,7 @@ SIGNATURES_HTML = {
         "Castel de Bois Genoud, 1023 Crissier<br>"
         "almaval.ch"
     ),
+    "gestion@almaval.ch": GESTION_SIGNATURE_HTML,
     "forte.albertomaria@gmail.com": (
         "Cordialement,<br><br>"
         "Dr Alberto M. Forte<br>"
@@ -676,6 +688,27 @@ def archive_email(account: str, message_id: str) -> dict:
 
 
 @mcp.tool()
+def mark_as_read(account: str, message_id: str) -> dict:
+    """
+    Segna un'email come letta, togliendole l'etichetta UNREAD.
+
+    Serve al giro di lettura della casella gestion@almaval.ch: i messaggi
+    gia' trattati vengono segnati letti nello stesso passaggio, cosi' che
+    quelli non letti restino esattamente la lista di cio' che manca.
+    Prima di questo strumento la stessa operazione richiedeva una chiamata
+    diretta all'API Gmail fuori dal connettore.
+
+    account: la casella a cui appartiene l'email
+    message_id: l'id del messaggio, ottenuto da list_emails
+    """
+    service = _gmail_service(account)
+    service.users().messages().modify(
+        userId="me", id=message_id, body={"removeLabelIds": ["UNREAD"]}
+    ).execute()
+    return {"id": message_id, "stato": "letta"}
+
+
+@mcp.tool()
 def label_email(account: str, message_id: str, label_name: str) -> dict:
     """
     Applica un'etichetta a un'email, creandola su quella casella se non
@@ -893,11 +926,19 @@ def setup_page(_: None = Depends(_check_admin)):
         logo_stato = f"presente ({len(_CORSALIS_LOGO_B64)} caratteri)"
     else:
         logo_stato = "assente (né variabile CORSALIS_LOGO_B64 né file corsalis_logo.b64)"
+    firme = "".join(
+        f"<li>{email}</li>"
+        for email in sorted(set(SIGNATURES_HTML) | {"endolift@corsalis.ch"})
+    )
     return f"""
     <html><body style="font-family: sans-serif; max-width: 640px; margin: 40px auto;">
     <h2>Gmail Send MCP &middot; caselle collegate</h2>
     <ul>{accounts}</ul>
     <p><a href="/connect">+ Collega una nuova casella</a></p>
+    <hr>
+    <p>Caselle con firma ufficiale configurata :</p>
+    <ul>{firme}</ul>
+    <p>Una casella collegata ma assente da questa lista invia messaggi senza firma.</p>
     <hr>
     <p>Logo Corsalis : {logo_stato}</p>
     <hr>
