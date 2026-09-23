@@ -2,7 +2,9 @@
 signatures_gestion.py
 
 Firma ufficiale della casella gestion@almaval.ch, da cui partono i
-messaggi dei robot Almaval e le risposte ai colleghi.
+messaggi dei robot Almaval e le risposte ai colleghi, piu' il meccanismo
+che permette a una casella di tenere la propria firma nelle impostazioni
+Gmail invece che qui dentro.
 
 Perche' vive in un file suo. Le altre firme di questo connettore sono
 poche righe e stanno bene dentro gmail_send_mcp.py. Questa e' una tabella
@@ -32,8 +34,7 @@ dipartimento, e schiacciare i due livelli in una riga sola cancellava
 proprio l'informazione che quelle righe portano.
 
 Nessun grassetto su queste due righe: nella firma originale hanno lo
-stesso peso delle righe di contatto. La firma di formation@ usa il
-grassetto, ma non fa testo qui.
+stesso peso delle righe di contatto.
 
 Il logo e' richiamato per URL e non allegato in linea. E' la stessa
 scelta della firma di am.forte@almaval.ch in gmail_send_mcp.py: Gmail
@@ -51,6 +52,10 @@ corpo del messaggio. Carattere, dimensione e colore del testo normale
 arrivano invece da STYLE_DEFAULT in gmail_send_mcp.py, unica fonte di
 verita' per il resto del messaggio.
 """
+
+import time
+
+from bs4 import BeautifulSoup
 
 _SH = "https://cdn.signaturehound.com"
 _SH_LOGO = f"{_SH}/users/43mcvhklnss78hz/88389069-042b-4926-9676-1db41af5cfdb.png"
@@ -143,3 +148,107 @@ GESTION_SIGNATURE_HTML = (
     + "</tr></tbody></table></td></tr>"
     "</tbody></table></td></tr></tbody></table></td></tr></tbody></table>"
 )
+
+
+# ---------------------------------------------------------------------------
+# La firma letta dalle impostazioni Gmail della casella
+# ---------------------------------------------------------------------------
+#
+# PERCHE'. Finche' la firma vive nel codice, ogni ritocco (una riga di
+# intestazione, un numero di telefono) passa da un commit e da un deploy.
+# Per le caselle elencate qui sotto la firma viene invece letta dalle
+# impostazioni Gmail a ogni invio: chi la modifica nella casella vede il
+# cambiamento partire da solo.
+#
+# OPT-IN PER CASELLA, mai per tutte. Le altre quattro firme del
+# connettore restano scritte nel codice e non cambiano comportamento.
+# Aggiungere una casella qui e' una decisione, non un effetto collaterale.
+#
+# COSA SERVE PERCHE' FUNZIONI. La portata gmail.settings.basic, che i
+# token gia' esistenti NON hanno: vanno ricollegati da /setup. Finche'
+# non lo sono, la lettura fallisce e si ripiega sulla firma scritta nel
+# codice, quindi niente si rompe nel frattempo.
+
+GMAIL_SIGNATURE_ACCOUNTS = {"gestion@almaval.ch"}
+
+# Una chiamata all'API a ogni messaggio sarebbe una dipendenza di rete in
+# piu' sul percorso di invio, per un dato che cambia una volta ogni tanto.
+# Dieci minuti sono un compromesso: una modifica fatta nella casella parte
+# entro il quarto d'ora, e l'invio non paga quasi mai la chiamata.
+_CACHE_TTL_SECONDI = 600
+
+# account -> (scadenza, html) ; html vuoto significa "letto, ma assente"
+_cache: dict = {}
+
+
+def _html_in_testo(html: str) -> str:
+    """
+    Versione testuale della firma, ricavata dall'HTML: Gmail conserva solo
+    l'HTML, e la parte testuale del messaggio ne ha comunque bisogno come
+    fallback per i lettori che non mostrano l'HTML.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    for br in soup.find_all("br"):
+        br.replace_with("\n")
+    righe = [r.strip() for r in soup.get_text(separator="\n").splitlines()]
+    return "\n".join(r for r in righe if r)
+
+
+def _leggi_firma(service, account: str) -> str:
+    """
+    L'HTML della firma configurata sulla casella, stringa vuota se non ce
+    n'e' una. Solleva qualunque eccezione dell'API: il chiamante decide
+    cosa farne.
+    """
+    risposta = service.users().settings().sendAs().get(
+        userId="me", sendAsEmail=account
+    ).execute()
+    return (risposta.get("signature") or "").strip()
+
+
+def firma_da_gmail(service_factory, account: str):
+    """
+    Rende (testo, html) della firma letta dalle impostazioni Gmail della
+    casella, oppure None quando quella firma non va usata.
+
+    None in tutti i casi in cui il ripiego sulla firma scritta nel codice
+    e' la cosa giusta:
+
+    - la casella non e' fra quelle che tengono la firma su Gmail;
+    - l'API risponde con un errore, per esempio 403 perche' il token non
+      porta ancora la portata gmail.settings.basic;
+    - la casella non ha alcuna firma configurata.
+
+    L'ultimo caso merita attenzione: una firma vuota NON deve produrre
+    messaggi nudi. E' esattamente il difetto che gestion@almaval.ch ha
+    avuto per settimane, e un ripiego silenzioso e' la garanzia che non
+    si ripeta.
+
+    Gli errori sono volutamente assorbiti tutti: nessun problema di rete o
+    di permessi deve impedire a un messaggio di partire. Il prezzo e' che
+    una portata mancante non si vede nei log; si vede pero' subito nel
+    messaggio ricevuto, che porta la firma scritta nel codice invece di
+    quella delle impostazioni.
+    """
+    if account not in GMAIL_SIGNATURE_ACCOUNTS:
+        return None
+
+    adesso = time.time()
+    in_cache = _cache.get(account)
+    if in_cache and in_cache[0] > adesso:
+        html = in_cache[1]
+    else:
+        try:
+            html = _leggi_firma(service_factory(account), account)
+        except Exception:
+            return None
+        _cache[account] = (adesso + _CACHE_TTL_SECONDI, html)
+
+    if not html:
+        return None
+    return _html_in_testo(html), html
+
+
+def svuota_cache() -> None:
+    """Dimentica le firme lette, utile dopo una modifica fatta nella casella."""
+    _cache.clear()
