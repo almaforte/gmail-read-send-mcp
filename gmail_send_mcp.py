@@ -120,10 +120,15 @@ FERNET_KEY = os.environ["FERNET_KEY"]
 
 REDIRECT_URI = f"{SERVER_URL}/oauth/callback"
 
+# Le portate CHIESTE a una NUOVA autorizzazione, su /connect. Non sono le
+# portate di un token gia' salvato: quelle stanno scritte nel token
+# stesso e si rileggono da li' (vedi _get_credentials, dove e' spiegata
+# la panne del 23.09.2026 che questa distinzione evita).
+#
 # gmail.settings.basic serve solo a leggere la firma configurata su una
 # casella (vedi signatures_gestion). I token gia' esistenti NON la
-# portano: restano validi per l'invio, ma la lettura della firma fallisce
-# finche' la casella non viene ricollegata da /setup.
+# portano: la lettura della firma ripiega allora sulla firma scritta nel
+# codice, finche' la casella non viene ricollegata da /setup.
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/gmail.compose",
@@ -178,7 +183,22 @@ def _get_credentials(email: str) -> Credentials:
     if email not in _tokens:
         raise ValueError(f"Casella '{email}' non collegata. Collegala su {SERVER_URL}/setup")
     decrypted = fernet.decrypt(_tokens[email].encode()).decode()
-    creds = Credentials.from_authorized_user_info(json.loads(decrypted), SCOPES)
+    # MAI passare SCOPES qui. Le portate di un token sono quelle che
+    # l'utente ha davvero concesso, e stanno scritte nel token salvato:
+    # from_authorized_user_info le rilegge da li' quando non gliene
+    # imponiamo altre.
+    #
+    # LA PANNE DEL 23.09.2026. Passando SCOPES, ogni credenziale caricata
+    # si ritrovava a dichiarare le portate della LISTA CORRENTE invece
+    # delle proprie. Al rinnovo del token, google-auth manda quella lista
+    # a Google, che rifiuta l'intera richiesta con invalid_scope appena
+    # contiene una portata mai concessa. L'aggiunta di
+    # gmail.settings.basic alla lista ha quindi messo fuori uso tutte le
+    # undici caselle in una volta, invio compreso, mentre il commento
+    # accanto a SCOPES prometteva il contrario. Una portata aggiunta alla
+    # lista non e' una richiesta rivolta alle nuove autorizzazioni: e'
+    # una condizione imposta a tutti i token esistenti.
+    creds = Credentials.from_authorized_user_info(json.loads(decrypted))
     if creds.expired and creds.refresh_token:
         creds.refresh(GoogleRequest())
         _store_credentials(email, creds)
