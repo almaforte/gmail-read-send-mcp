@@ -1,9 +1,8 @@
 """
 signatures_gestion.py
 
-Firma ufficiale della casella gestion@almaval.ch, il Service de gestion
-administrative, da cui partono i messaggi dei robot Almaval e le risposte
-ai colleghi.
+Firma ufficiale della casella gestion@almaval.ch, da cui partono i
+messaggi dei robot Almaval e le risposte ai colleghi.
 
 Perche' vive in un file suo. Le altre firme di questo connettore sono
 poche righe e stanno bene dentro gmail_send_mcp.py. Questa e' una tabella
@@ -14,21 +13,37 @@ due dizionari come tutte le altre, quindi la convenzione del repository
 resta valida.
 
 Da dove viene la forma. Le firme Almaval sono prodotte da Signature Hound
-e le loro immagini sono ospitate da lui. Questa firma riprende la
-struttura esatta di quella della casella formation@almaval.ch, letta nel
-codice HTML di un messaggio reale il 23.09.2026: stesso logo, stessi
-pittogrammi teal 128da2, stesso filetto dorato #f7cb4d, stessi social.
-Nessuna immagine e' stata creata per l'occasione.
+e le loro immagini sono ospitate da lui. La struttura, il logo, i
+pittogrammi teal 128da2, il filetto dorato #f7cb4d e i social sono quelli
+delle altre caselle della casa. Nessuna immagine e' stata creata per
+l'occasione.
+
+LE DUE RIGHE DI INTESTAZIONE, e non una. Una prima versione portava
+"Service de gestion administrative" su una riga sola: era una mia
+invenzione, ricalcata sulla firma di formation@ che dice "Équipe
+Formation". La firma vera, creata da Alberto nella casella, ne porta due:
+
+    Département administratif
+    Service de gestion
+
+Sono il dipartimento e poi il servizio, cioe' la struttura di governance
+della casa, non un nome unico. Un servizio non si chiama come il suo
+dipartimento, e schiacciare i due livelli in una riga sola cancellava
+proprio l'informazione che quelle righe portano.
+
+Nessun grassetto su queste due righe: nella firma originale hanno lo
+stesso peso delle righe di contatto. La firma di formation@ usa il
+grassetto, ma non fa testo qui.
 
 Il logo e' richiamato per URL e non allegato in linea. E' la stessa
 scelta della firma di am.forte@almaval.ch in gmail_send_mcp.py: Gmail
 mostra di default le immagini remote, e un allegato in linea
 costringerebbe a passare per multipart/related anche per questa casella.
 
-Nessun nome di persona. La casella parla a nome del servizio: la firma
-porta "Service de gestion administrative" e mai un nome proprio, nemmeno
-delle iniziali. La menzione "Validé par AMF", prevista dalla carta dei
-robot dell'11.09.2026, e' stata tolta il 23.09.2026 per questa ragione.
+Nessun nome di persona. La casella parla a nome del servizio: mai un nome
+proprio, nemmeno delle iniziali. La menzione "Validé par AMF", prevista
+dalla carta dei robot dell'11.09.2026, e' stata tolta il 23.09.2026 per
+questa ragione.
 
 Stile. Le dimensioni e i colori interni alla tabella sono quelli di
 Signature Hound e restano qui, perche' descrivono la tabella e non il
@@ -41,7 +56,12 @@ _SH = "https://cdn.signaturehound.com"
 _SH_LOGO = f"{_SH}/users/43mcvhklnss78hz/88389069-042b-4926-9676-1db41af5cfdb.png"
 
 _GRIS = "rgb(136,136,136)"
+_GRIS_TITRE = "#7b7a7a"
 _TEAL = "rgb(18,141,162)"
+
+# Le due righe di intestazione, nell'ordine: prima il dipartimento, poi il
+# servizio. Cambiare qui, non nel blocco HTML piu' sotto.
+_INTESTAZIONE = ("Département administratif", "Service de gestion")
 
 
 def _riga(icona: str, contenuto: str, href: str = "", grassetto: bool = False) -> str:
@@ -80,13 +100,16 @@ def _social(icona: str, href: str) -> str:
 
 GESTION_SIGNATURE_TEXT = (
     "Cordialement,\n\n"
-    "Service de gestion administrative\n\n"
+    + "\n".join(_INTESTAZIONE)
+    + "\n\n"
     "gestion@almaval.ch\n"
     "Secrétariat : +41 21 525 35 14\n"
     "Secrétariat (mobile, aussi WhatsApp) : +41 76 702 78 69\n"
     "Castel de Bois Genoud, 1023 Crissier\n"
     "almaval.ch"
 )
+
+_INTESTAZIONE_HTML = "<br>".join(_INTESTAZIONE)
 
 GESTION_SIGNATURE_HTML = (
     "Cordialement,<br><br>"
@@ -103,8 +126,8 @@ GESTION_SIGNATURE_HTML = (
     '<table cellpadding="0" cellspacing="0"><tbody>'
     '<tr><td style="padding:0 1px 9px 0;border-bottom:2px solid #f7cb4d;'
     'font-size:11px;line-height:14px;white-space:nowrap">'
-    '<p style="font-size:11px;line-height:14px;font-weight:700;color:#7b7a7a;'
-    'margin:1px;white-space:nowrap">Service de gestion administrative</p></td></tr>'
+    f'<p style="font-size:11px;line-height:14px;color:{_GRIS_TITRE};'
+    f'margin:1px;white-space:nowrap">{_INTESTAZIONE_HTML}</p></td></tr>'
     '<tr><td style="padding:9px 1px 9px 0;border-bottom:2px solid #f7cb4d">'
     '<table cellpadding="0" cellspacing="0"><tbody>'
     + _riga("email", "gestion@almaval.ch", "mailto:gestion@almaval.ch")
