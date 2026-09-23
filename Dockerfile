@@ -12,7 +12,13 @@ RUN apt-get update \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# ATTENZIONE: i sorgenti si copiano UNO A UNO, non con COPY . .
+# Un modulo nuovo che non compare in questa lista non finisce
+# nell'immagine e il servizio parte in CRASHED con ModuleNotFoundError.
+# Succede solo in produzione: in locale py_compile passa senza dire
+# niente. Aggiungendo un file al repository, aggiungilo anche qui.
 COPY gmail_send_mcp.py .
+COPY signatures_gestion.py .
 COPY gmail_drafts_tools.py .
 COPY gmail_forward_tools.py .
 COPY gmail_attach_tools.py .
