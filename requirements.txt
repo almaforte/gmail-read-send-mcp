@@ -6,4 +6,14 @@ google-auth-oauthlib==1.*
 google-api-python-client==2.*
 cryptography==43.*
 beautifulsoup4
-git+https://github.com/almaforte/gmail-message-rules.git
+# Pacchetto condiviso delle regole di composizione, installato sempre
+# dall'ultima versione di main.
+#
+# ATTENZIONE: la couche Docker del pip install resta in cache finche'
+# QUESTO file non cambia. Un deploy fatto dopo un aggiornamento del
+# pacchetto riuserebbe quindi la versione vecchia, senza dirlo. Per
+# ripescare davvero l'ultima versione, cambiare la data qui sotto: la
+# riga cambia, la cache si invalida, pip riscarica.
+#
+# Ultimo ripescaggio forzato: 2026-09-23
+git+https://github.com/almaforte/gmail-message-rules.git@main
