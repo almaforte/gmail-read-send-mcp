@@ -151,12 +151,18 @@ SCOPES = [
     "https://www.googleapis.com/auth/userinfo.email",
 ]
 
-# Portate che un token deve avere perche' tutti gli strumenti funzionino,
-# con lo strumento che ne dipende: usate solo per la diagnosi su /setup.
-_PORTATE_ATTESE = {
-    "https://www.googleapis.com/auth/gmail.modify": "mark_as_read, archive_email, label_email",
-    "https://www.googleapis.com/auth/gmail.settings.basic": "firma letta da Gmail",
-}
+# Diagnosi su /setup: quali portate servono DAVVERO a quale casella.
+# Una portata assente e' un problema solo per la casella che usa lo
+# strumento che ne dipende. Segnare in rosso tutte le caselle per una
+# portata che non usano sarebbe un falso allarme: e' esattamente cio' che
+# la prima versione di questa pagina ha fatto il 24.09.2026, undici righe
+# rosse per un solo problema reale.
+_MODIFY = "https://www.googleapis.com/auth/gmail.modify"
+_SETTINGS_BASIC = "https://www.googleapis.com/auth/gmail.settings.basic"
+
+# Le caselle il cui giro di lettura segna i messaggi come letti, li
+# archivia o li etichetta tramite il connettore. Oggi solo gestion@.
+CASELLE_CHE_SMISTANO = {"gestion@almaval.ch"}
 
 CLIENT_CONFIG = {
     "web": {
@@ -1007,25 +1013,41 @@ def _portate_del_token(email: str) -> list[str]:
     return list(scopes)
 
 
+def _portate_necessarie(email: str) -> dict:
+    """
+    Le portate di cui QUESTA casella ha bisogno oltre a quelle di base
+    (lettura e invio), con lo strumento che ne dipende.
+    """
+    necessarie = {}
+    if email in CASELLE_CHE_SMISTANO:
+        necessarie[_MODIFY] = "mark_as_read, archive_email, label_email"
+    if email in GMAIL_SIGNATURE_ACCOUNTS:
+        necessarie[_SETTINGS_BASIC] = "firma letta da Gmail"
+    return necessarie
+
+
 def _riga_casella(email: str) -> str:
     """
     Una riga della lista su /setup: la casella, le sue portate in forma
-    breve, e in rosso cio' che le manca rispetto a _PORTATE_ATTESE, con lo
-    strumento che ne soffre. Nessun segreto esce: solo i nomi delle portate.
+    breve, e un solo giudizio. Rosso soltanto se manca una portata che
+    QUESTA casella usa davvero; verde altrimenti. Nessun segreto esce:
+    solo i nomi delle portate.
     """
     portate = _portate_del_token(email)
     brevi = ", ".join(sorted(p.rsplit("/", 1)[-1] for p in portate)) or "illeggibili"
     mancanti = [
         f"{p.rsplit('/', 1)[-1]} (serve a: {uso})"
-        for p, uso in _PORTATE_ATTESE.items()
+        for p, uso in _portate_necessarie(email).items()
         if p not in portate
     ]
-    avviso = (
-        f'<br><span style="color:#b00020;">manca: {"; ".join(mancanti)}. Ricollegare con il link qui sotto.</span>'
-        if mancanti
-        else '<br><span style="color:#2e7d32;">tutte le portate presenti</span>'
-    )
-    return f'<li>{email}<br><small>{brevi}{avviso}</small></li>'
+    if mancanti:
+        avviso = (
+            f'<br><span style="color:#b00020;">manca: {"; ".join(mancanti)}. '
+            "Ricollegare con il link qui sotto.</span>"
+        )
+    else:
+        avviso = '<br><span style="color:#2e7d32;">a posto per l\'uso di questa casella</span>'
+    return f'<li>{email}<br><small style="color:#888888;">{brevi}</small><small>{avviso}</small></li>'
 
 
 @app.get("/setup", response_class=HTMLResponse)
