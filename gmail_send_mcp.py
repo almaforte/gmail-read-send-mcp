@@ -129,14 +129,34 @@ REDIRECT_URI = f"{SERVER_URL}/oauth/callback"
 # casella (vedi signatures_gestion). I token gia' esistenti NON la
 # portano: la lettura della firma ripiega allora sulla firma scritta nel
 # codice, finche' la casella non viene ricollegata da /setup.
+#
+# gmail.modify serve a mark_as_read, archive_email e label_email, cioe' a
+# tutto cio' che passa da messages().modify(). Mancava dalla lista fin
+# dall'inizio: nessuna ricollegatura poteva quindi dare quei tre
+# strumenti, su nessuna casella, e ognuno rispondeva 403
+# insufficientPermissions. E' cosi' che la ricollegatura di gestion@ del
+# 24.09.2026 e' stata giudicata "non riuscita", mentre aveva dato
+# esattamente cio' che veniva chiesto (la firma letta da Gmail funzionava
+# gia'). La pagina /setup mostra ora le portate di ogni token, cosi' la
+# domanda "la ricollegatura ha preso?" si risolve a colpo d'occhio.
+# Come per settings.basic, solo i token ricollegati dopo questa aggiunta
+# la portano: gli altri continuano a funzionare con le loro.
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/gmail.compose",
     "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/gmail.settings.basic",
     "openid",
     "https://www.googleapis.com/auth/userinfo.email",
 ]
+
+# Portate che un token deve avere perche' tutti gli strumenti funzionino,
+# con lo strumento che ne dipende: usate solo per la diagnosi su /setup.
+_PORTATE_ATTESE = {
+    "https://www.googleapis.com/auth/gmail.modify": "mark_as_read, archive_email, label_email",
+    "https://www.googleapis.com/auth/gmail.settings.basic": "firma letta da Gmail",
+}
 
 CLIENT_CONFIG = {
     "web": {
@@ -971,9 +991,46 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 
+def _portate_del_token(email: str) -> list[str]:
+    """
+    Le portate scritte nel token salvato di una casella, lette senza
+    rinnovarlo e senza chiamare Google. Lista vuota se il token non si
+    lascia leggere.
+    """
+    try:
+        info = json.loads(fernet.decrypt(_tokens[email].encode()).decode())
+    except Exception:
+        return []
+    scopes = info.get("scopes") or []
+    if isinstance(scopes, str):
+        scopes = scopes.split()
+    return list(scopes)
+
+
+def _riga_casella(email: str) -> str:
+    """
+    Una riga della lista su /setup: la casella, le sue portate in forma
+    breve, e in rosso cio' che le manca rispetto a _PORTATE_ATTESE, con lo
+    strumento che ne soffre. Nessun segreto esce: solo i nomi delle portate.
+    """
+    portate = _portate_del_token(email)
+    brevi = ", ".join(sorted(p.rsplit("/", 1)[-1] for p in portate)) or "illeggibili"
+    mancanti = [
+        f"{p.rsplit('/', 1)[-1]} (serve a: {uso})"
+        for p, uso in _PORTATE_ATTESE.items()
+        if p not in portate
+    ]
+    avviso = (
+        f'<br><span style="color:#b00020;">manca: {"; ".join(mancanti)}. Ricollegare con il link qui sotto.</span>'
+        if mancanti
+        else '<br><span style="color:#2e7d32;">tutte le portate presenti</span>'
+    )
+    return f'<li>{email}<br><small>{brevi}{avviso}</small></li>'
+
+
 @app.get("/setup", response_class=HTMLResponse)
 def setup_page(_: None = Depends(_check_admin)):
-    accounts = "".join(f"<li>{email}</li>" for email in sorted(_tokens)) or "<li>nessuna casella collegata</li>"
+    accounts = "".join(_riga_casella(email) for email in sorted(_tokens)) or "<li>nessuna casella collegata</li>"
     if _CORSALIS_LOGO_B64:
         logo_stato = f"presente ({len(_CORSALIS_LOGO_B64)} caratteri)"
     else:
@@ -985,7 +1042,10 @@ def setup_page(_: None = Depends(_check_admin)):
     <html><body style="font-family: sans-serif; max-width: 640px; margin: 40px auto;">
     <h2>Gmail Send MCP &middot; caselle collegate</h2>
     <ul>{accounts}</ul>
-    <p><a href="/connect">+ Collega una nuova casella</a></p>
+    <p><a href="/connect">+ Collega una nuova casella, o ricollegane una esistente</a></p>
+    <p><small>Alla schermata di consenso Google, scegliere la casella giusta e
+    spuntare tutte le autorizzazioni proposte: una casella non spuntata non
+    viene concessa e il collegamento fallisce.</small></p>
     <hr>
     <p>Firma scritta nel codice del connettore :</p>
     <ul>{firme_codice}</ul>
