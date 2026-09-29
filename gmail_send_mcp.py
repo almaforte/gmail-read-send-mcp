@@ -334,19 +334,28 @@ _ACCOUNT_LOGO_CID = {
 }
 
 SIGNATURES_HTML = {
+    # Spaziature validate da Alberto il 30.09.2026 (firma degli avvisi del
+    # Drive del comitato LMT Vaud, che si ispirava a questa): interlinea
+    # 1.7 su tutta la firma per dare aria alle righe, e sotto il nome una
+    # mezza riga (6px) invece di una riga intera prima delle qualifiche.
+    # apply_style di gmail_message_rules antepone carattere, dimensione e
+    # colore allo stile gia' presente sul tag: line-height e margin scritti
+    # qui sopravvivono.
     "am.forte@almaval.ch": (
-        "Cordialement,<br><br>"
-        "Dr Alberto M. Forte<br>"
-        "Directeur médical<br>"
-        "Psychiatre &amp; psychothérapeute<br><br>"
+        '<div style="line-height:1.7">'
+        "<p>Cordialement,</p>"
+        '<p style="margin-bottom:6px">Dr Alberto M. Forte</p>'
+        '<p style="margin-top:0">Directeur médical<br>'
+        "Psychiatre &amp; psychothérapeute</p>"
         f'<img src="{_ALMAVAL_LOGO_URL}" alt="Almaval" width="140" '
-        'style="display:block;margin-bottom:12px;border:0;">'
-        "am.forte@almaval.ch - am.forte@hin.ch<br>"
+        'style="display:block;margin:0 0 12px;border:0;">'
+        '<p style="margin-top:0">am.forte@almaval.ch - am.forte@hin.ch<br>'
         "Secrétariat : +41 21 525 35 14<br>"
         "Secrétariat (mobile, aussi WhatsApp) : +41 76 702 78 69<br>"
         "Ligne directe (aussi WhatsApp) : +41 76 457 72 75<br>"
         "Castel de Bois Genoud, 1023 Crissier<br>"
-        "almaval.ch"
+        "almaval.ch</p>"
+        "</div>"
     ),
     "gestion@almaval.ch": GESTION_SIGNATURE_HTML,
     "forte.albertomaria@gmail.com": (
