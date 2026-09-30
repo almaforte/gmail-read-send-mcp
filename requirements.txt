@@ -6,6 +6,10 @@ google-auth-oauthlib==1.*
 google-api-python-client==2.*
 cryptography==43.*
 beautifulsoup4
+# Lettura del testo dei PDF ricevuti (gmail_lettura_allegati_tools.py).
+# Libreria pura Python, nessuna dipendenza di sistema da aggiungere
+# all'immagine.
+pypdf==5.*
 # Pacchetto condiviso delle regole di composizione, installato sempre
 # dall'ultima versione di main.
 #
@@ -15,5 +19,5 @@ beautifulsoup4
 # ripescare davvero l'ultima versione, cambiare la data qui sotto: la
 # riga cambia, la cache si invalida, pip riscarica.
 #
-# Ultimo ripescaggio forzato: 2026-09-23b (grigio chiaro del disclaimer)
+# Ultimo ripescaggio forzato: 2026-09-30 (lettura degli allegati)
 git+https://github.com/almaforte/gmail-message-rules.git@main
